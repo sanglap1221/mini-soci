@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "75100525802",
+    "project_id": "pay-65",
+    "storage_bucket": "pay-65.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:75100525802:android:e92f4a1472378cba8f3393",
+        "android_client_info": {
+          "package_name": "com.example.pay_go"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCH6oqm_xGIWkrYE3UtZO9mdyRhrTg43zQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
