@@ -9,7 +9,7 @@ class ChatScreen extends StatefulWidget {
   const ChatScreen({
     super.key,
     required this.chatId,
-    required this.otherUserId, // howe to check
+    required this.otherUserId,
   });
 
   @override

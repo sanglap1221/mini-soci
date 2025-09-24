@@ -4,6 +4,44 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 class ProfilePage extends StatelessWidget {
   final String? userId = FirebaseAuth.instance.currentUser?.uid;
+  Future<void> _editUsername(
+    BuildContext context,
+    String currentUsername,
+  ) async {
+    final TextEditingController _controller = TextEditingController(
+      text: currentUsername,
+    );
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Edit Username'),
+        content: TextField(
+          controller: _controller,
+          decoration: InputDecoration(border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => {Navigator.pop(context)},
+            child: Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              //let me
+              if (_controller.text.trim().isNotEmpty) {
+                await FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(userId)
+                    .update({'username': _controller.text.trim()});
+                Navigator.pop(context);
+              }
+            },
+            child: Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,11 +92,24 @@ class ProfilePage extends StatelessWidget {
                       ),
                     ),
                     SizedBox(height: 16),
-                    Text(
-                      userData?['username'] ?? 'Username',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
+                    GestureDetector(
+                      onTap: () => _editUsername(
+                        context,
+                        userData?['username'] ?? 'Username',
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            userData?['username'] ?? 'Username',
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Icon(Icons.edit, size: 20),
+                        ],
                       ),
                     ),
                     SizedBox(height: 8),
