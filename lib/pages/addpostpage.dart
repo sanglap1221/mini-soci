@@ -1,10 +1,7 @@
 import 'dart:io';
-
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
+import '../services/api_service.dart';
 
 class Addpostpage extends StatefulWidget {
   const Addpostpage({super.key});
@@ -14,6 +11,7 @@ class Addpostpage extends StatefulWidget {
 }
 
 class _AddpostpageState extends State<Addpostpage> {
+  final _apiService = ApiService();
   File? _image;
   final _captionController = TextEditingController();
   bool _isLoading = false;
@@ -29,35 +27,45 @@ class _AddpostpageState extends State<Addpostpage> {
   }
 
   Future<void> _createPost() async {
-    if (_image == null) return;
+    if (_image == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Please select an image')));
+      return;
+    }
+
     setState(() {
       _isLoading = true;
     });
+
     try {
-      // Upload image to Firebase Storage
-      final storageRef = FirebaseStorage.instance.ref().child(
-        'posts/${DateTime.now().toString()}',
-      );
-      await storageRef.putFile(_image!);
-      final imageUrl = await storageRef.getDownloadURL();
+      // Create post using API service
+      await _apiService.createPost(_captionController.text.trim(), _image!);
 
-      // Save post data to Firestore
-      await FirebaseFirestore.instance.collection('posts').add({
-        'userId': FirebaseAuth.instance.currentUser?.uid,
-        'imageUrl': imageUrl,
-        'caption': _captionController.text,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
-
-      Navigator.pop(context);
+      if (mounted) {
+        Navigator.pop(context, true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Post created successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toString())));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceAll('Exception: ', '')),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 

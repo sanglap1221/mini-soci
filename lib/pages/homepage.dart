@@ -14,23 +14,40 @@ class Homepage extends StatefulWidget {
 
 class _HomepageState extends State<Homepage> {
   int _selectedIndex = 0;
+  Object? _feedRefreshToken;
 
   void signOut() {
     FirebaseAuth.instance.signOut();
   }
 
-  void _navigateToAddPost() {
-    Navigator.push(
+  Future<void> _navigateToAddPost() async {
+    final created = await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (context) => const Addpostpage()),
     );
+
+    if (created == true) {
+      setState(() {
+        _feedRefreshToken = Object();
+      });
+    }
   }
 
-  final List<Widget> _pages = [
-    const FeedPage(),
-    const ChatListPage(),
-    ProfilePage(),
-  ];
+  Widget _getPage(int index) {
+    print('_getPage called with index: $index'); // Debug log
+    switch (index) {
+      case 0:
+        print('Creating new FeedPage instance'); // Debug log
+        return FeedPage(refreshTrigger: _feedRefreshToken);
+      case 1:
+        return const ChatListPage();
+      case 2:
+        print('Creating new ProfilePage instance'); // Debug log
+        return ProfilePage();
+      default:
+        return const FeedPage();
+    }
+  }
 
   void _onItemTapped(int index) {
     setState(() {
@@ -41,7 +58,7 @@ class _HomepageState extends State<Homepage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _pages[_selectedIndex],
+      body: _getPage(_selectedIndex),
       floatingActionButton: _selectedIndex == 0
           ? FloatingActionButton(
               onPressed: _navigateToAddPost,
