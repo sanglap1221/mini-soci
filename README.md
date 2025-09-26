@@ -1,16 +1,77 @@
-# pay_go
+# Pay Go
 
-A new Flutter project.
+A Flutter-based social application with chat and post sharing functionalities.
+
+## Features
+
+*   **Authentication:** Secure user login and registration.
+*   **Chat:** Real-time chat with other users.
+*   **Feed:** A feed to view posts from other users.
+*   **Post Creation:** Create and share your own posts.
+*   **User Profiles:** View and manage user profiles.
 
 ## Getting Started
 
-This project is a starting point for a Flutter application.
+### Prerequisites
 
-A few resources to get you started if this is your first Flutter project:
+*   [Flutter SDK](https://flutter.dev/docs/get-started/install)
+*   A Firebase project.
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+### Installation
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+1.  **Clone the repository:**
+    ```bash
+    git clone <repository-url>
+    ```
+2.  **Install dependencies:**
+    ```bash
+    flutter pub get
+    ```
+3.  **Configure Firebase:**
+    *   Create a new Firebase project at [https://console.firebase.google.com/](https://console.firebase.google.com/).
+    *   Add an Android app to your Firebase project with the package name `com.example.pay_go` (you can find the package name in `android/app/build.gradle.kts`).
+    *   Download the `google-services.json` file and place it in the `android/app` directory.
+    *   Add an iOS app to your Firebase project with the bundle ID `com.example.payGo` (you can find the bundle ID in Xcode under `General > Identity > Bundle Identifier`).
+    *   Download the `GoogleService-Info.plist` file and place it in the `ios/Runner` directory.
+
+### Running the Application
+
+```bash
+flutter run
+```
+
+## Project Structure
+
+```
+lib/
+├── pages/
+│   ├── addpostpage.dart      # Page for creating new posts
+│   ├── auth_gate.dart        # Handles authentication state
+│   ├── chat_list_page.dart   # Lists all chats
+│   ├── chat_screen.dart      # The chat screen for a single conversation
+│   ├── feed_page.dart        # The main feed page
+│   ├── homepage.dart         # The home page
+│   ├── login_or_register.dart # Handles switching between login and signup
+│   ├── login.dart            # The login page
+│   ├── profile_page.dart     # The user profile page
+│   └── signup.dart           # The signup page
+├── services/
+│   └── api_service.dart      # Service for API calls
+├── firebase_options.dart     # Firebase configuration
+└── main.dart                 # The main entry point of the application
+```
+
+## Dependencies
+
+*   [flutter](https://pub.dev/packages/flutter)
+*   [cupertino_icons](https://pub.dev/packages/cupertino_icons)
+*   [image_picker](https://pub.dev/packages/image_picker)
+*   [firebase_core](https://pub.dev/packages/firebase_core)
+*   [firebase_auth](https://pub.dev/packages/firebase_auth)
+*   [cloud_firestore](https://pub.dev/packages/cloud_firestore)
+*   [firebase_storage](https://pub.dev/packages/firebase_storage)
+*   [http_parser](https://pub.dev/packages/http_parser)
+
+---
+
+This project was generated with Flutter. For more information on Flutter, see the [official documentation](https://flutter.dev/docs).
