@@ -2,19 +2,26 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/api_service.dart';
+import 'chat_screen.dart';
 
 class ProfilePage extends StatefulWidget {
-  const ProfilePage({super.key});
+  final String? userId;
+  const ProfilePage({super.key, this.userId});
 
   @override
   State<ProfilePage> createState() => _ProfilePageState();
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  final String? userId = FirebaseAuth.instance.currentUser?.uid;
+  final String? currentUserId = FirebaseAuth.instance.currentUser?.uid;
+  late final String profileUserId;
+  late final bool isCurrentUserProfile;
+
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final _apiService = ApiService();
+
   File? _localProfileImage;
   Map<String, dynamic>? _userData;
   Future<List<dynamic>>? _userPostsFuture;
@@ -31,14 +38,19 @@ class _ProfilePageState extends State<ProfilePage> {
   @override
   void initState() {
     super.initState();
+    final cUserId = FirebaseAuth.instance.currentUser?.uid;
+    profileUserId = widget.userId ?? cUserId!;
+    isCurrentUserProfile = profileUserId == cUserId;
+
     _loadProfile();
     _refreshUserPosts();
   }
 
   Future<void> _loadProfile() async {
     try {
-      if (userId != null) {
-        final data = await _apiService.getProfile(userId!);
+      // No need to check for null, profileUserId is always set in initState
+      if (mounted) {
+        final data = await _apiService.getProfile(profileUserId);
         print('Profile data loaded: $data'); // Debug log
         if (mounted) {
           setState(() {
@@ -58,9 +70,8 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   void _refreshUserPosts() {
-    if (userId == null) return;
     setState(() {
-      _userPostsFuture = _apiService.getUserPosts(userId!);
+      _userPostsFuture = _apiService.getUserPosts(profileUserId);
     });
   }
 
@@ -89,7 +100,7 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
           TextButton(
             onPressed: () async {
-              if (userId != null && _userData != null) {
+              if (currentUserId != null && _userData != null) {
                 await _apiService.updateProfile(
                   username: _userData!['username'],
                   bio: controller.text.trim(),
@@ -185,6 +196,12 @@ class _ProfilePageState extends State<ProfilePage> {
           _localProfileImage!,
         );
 
+        // Update the user document in Firestore
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(profileUserId)
+            .update({'profilePicUrl': result['profilePicUrl']});
+
         // Update the UI with the new profile picture URL
         if (mounted) {
           setState(() {
@@ -219,7 +236,7 @@ class _ProfilePageState extends State<ProfilePage> {
     return Stack(
       children: [
         GestureDetector(
-          onTap: _showProfileOptions,
+          onTap: isCurrentUserProfile ? _showProfileOptions : null,
           child: CircleAvatar(
             radius: 50,
             backgroundColor: Colors.grey[300],
@@ -259,21 +276,22 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
           ),
         ),
-        Positioned(
-          bottom: 0,
-          right: 0,
-          child: GestureDetector(
-            onTap: _pickImage,
-            child: Container(
-              padding: EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: Colors.blue,
-                shape: BoxShape.circle,
+        if (isCurrentUserProfile)
+          Positioned(
+            bottom: 0,
+            right: 0,
+            child: GestureDetector(
+              onTap: _pickImage,
+              child: Container(
+                padding: EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: Colors.blue,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.camera_alt, size: 20, color: Colors.white),
               ),
-              child: Icon(Icons.camera_alt, size: 20, color: Colors.white),
             ),
           ),
-        ),
       ],
     );
   }
@@ -404,23 +422,49 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (userId == null) {
-      return Center(child: Text('Please login to view profile'));
+  Future<void> _startChat() async {
+    if (currentUserId == null) return;
+
+    final participants = [currentUserId, profileUserId]..sort();
+    final chatId = participants.join('_');
+
+    final chatDoc = FirebaseFirestore.instance.collection('chats').doc(chatId);
+    final chatSnapshot = await chatDoc.get();
+
+    if (!chatSnapshot.exists) {
+      await chatDoc.set({
+        'participants': participants,
+        'lastMessage': 'Chat started',
+        'lastMessageTime': FieldValue.serverTimestamp(),
+        'unreadCount': 0,
+      });
     }
 
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) =>
+              ChatScreen(chatId: chatId, otherUserId: profileUserId),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
       appBar: AppBar(
-        title: Text('Profile'),
+        title: Text(isCurrentUserProfile ? 'My Profile' : 'Profile'),
         actions: [
-          IconButton(
-            icon: Icon(Icons.settings),
-            onPressed: () {
-              _scaffoldKey.currentState?.openEndDrawer();
-            },
-          ),
+          if (isCurrentUserProfile)
+            IconButton(
+              icon: Icon(Icons.settings),
+              onPressed: () {
+                _scaffoldKey.currentState?.openEndDrawer();
+              },
+            ),
         ],
       ),
       endDrawer: Drawer(
@@ -488,54 +532,112 @@ class _ProfilePageState extends State<ProfilePage> {
                           child: Column(
                             children: [
                               _buildProfilePicture(_userData),
-                              SizedBox(height: 16),
-                              GestureDetector(
-                                onTap: () => _editUsername(
-                                  context,
-                                  _userData?['username'] ?? 'Username',
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text(
-                                      _userData?['username'] ?? 'Username',
-                                      style: TextStyle(
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    SizedBox(width: 8),
-                                    Icon(Icons.edit, size: 20),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(height: 8),
-                              GestureDetector(
-                                onTap: () =>
-                                    _editBio(context, _userData?['bio'] ?? ''),
-                                child: Container(
-                                  padding: EdgeInsets.all(8),
-                                  child: Column(
+                              const SizedBox(height: 16),
+                              if (isCurrentUserProfile)
+                                // Show editable username for current user
+                                GestureDetector(
+                                  onTap: () => _editUsername(
+                                    context,
+                                    _userData?['username'] ?? 'Username',
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
                                       Text(
-                                        _userData?['bio'] ?? 'Tap to add bio',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          color: _userData?['bio'] == null
-                                              ? Colors.grey
-                                              : Colors.black,
+                                        _userData?['username'] ?? 'Username',
+                                        style: const TextStyle(
+                                          fontSize: 24,
+                                          fontWeight: FontWeight.bold,
                                         ),
                                       ),
-                                      SizedBox(height: 4),
-                                      Icon(Icons.edit, size: 16),
+                                      const SizedBox(width: 8),
+                                      const Icon(Icons.edit, size: 20),
                                     ],
                                   ),
+                                )
+                              else
+                                // Show non-editable username for other users
+                                Text(
+                                  _userData?['username'] ?? 'Username',
+                                  style: const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
-                              ),
+                              const SizedBox(height: 8),
+                              if (isCurrentUserProfile)
+                                // Show editable bio for current user
+                                GestureDetector(
+                                  onTap: () => _editBio(
+                                    context,
+                                    _userData?['bio'] ?? '',
+                                  ),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    child: Column(
+                                      children: [
+                                        Text(
+                                          _userData?['bio'] ?? 'Tap to add bio',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            color: _userData?['bio'] == null
+                                                ? Colors.grey
+                                                : Colors.black,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        const Icon(Icons.edit, size: 16),
+                                      ],
+                                    ),
+                                  ),
+                                )
+                              else
+                                // Show non-editable bio for other users
+                                Padding(
+                                  padding: const EdgeInsets.all(8.0),
+                                  child: Text(
+                                    _userData?['bio'] ?? 'No bio available.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(color: Colors.grey[600]),
+                                  ),
+                                ),
+                              if (!isCurrentUserProfile)
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 16.0,
+                                  ),
+                                  child: ElevatedButton.icon(
+                                    onPressed: _startChat,
+                                    icon: const Icon(Icons.message_outlined),
+                                    label: const Text('Message'),
+                                    style: ElevatedButton.styleFrom(
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: 24,
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                             ],
                           ),
                         ),
-                        // Posts grid
+                        const Divider(),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(
+                            vertical: 8.0,
+                            horizontal: 16.0,
+                          ),
+                          child: Text(
+                            'Posts',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                         // Posts grid
                         FutureBuilder<List<dynamic>>(
                           future: _userPostsFuture,
@@ -587,9 +689,11 @@ class _ProfilePageState extends State<ProfilePage> {
                                   onTap: () {
                                     // TODO: Navigate to post detail page
                                   },
-                                  onLongPress: () {
-                                    _showPostOptions(context, post);
-                                  },
+                                  onLongPress: isCurrentUserProfile
+                                      ? () {
+                                          _showPostOptions(context, post);
+                                        }
+                                      : null,
                                   child: Container(
                                     decoration: BoxDecoration(
                                       borderRadius: BorderRadius.circular(4),

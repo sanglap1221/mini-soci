@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:pay_go/services/api_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'profile_page.dart';
 
 class FeedPage extends StatefulWidget {
   const FeedPage({super.key, this.refreshTrigger});
@@ -141,6 +143,15 @@ class _FeedPageState extends State<FeedPage> {
     _loadPosts();
   }
 
+  void _navigateToUserProfile(String userId) {
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => ProfilePage(userId: userId)),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     print(
@@ -262,17 +273,25 @@ class _FeedPageState extends State<FeedPage> {
                               ),
                             ),
                     ),
-                    SizedBox(width: 8),
-                    // Author name
-                    Expanded(
-                      child: Text(
-                        post['author']?['username'] ?? 'Unknown User',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
+                    GestureDetector(
+                      onTap: () => _navigateToUserProfile(post['userId']),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                        child: Row(
+                          children: [
+                            // Author name
+                            Text(
+                              post['author']?['username'] ?? 'Unknown User',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
+                    Expanded(child: Container()), // Pushes menu to the right
                     // Menu button for own posts
                     if (isOwnPost)
                       PopupMenuButton<String>(
@@ -326,7 +345,7 @@ class _FeedPageState extends State<FeedPage> {
       height: 200,
       loadingBuilder: (context, child, loadingProgress) {
         if (loadingProgress == null) return child;
-        return Container(
+        return SizedBox(
           height: 200,
           child: Center(
             child: CircularProgressIndicator(

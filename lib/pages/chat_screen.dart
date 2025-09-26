@@ -77,7 +77,7 @@ class _ChatScreenState extends State<ChatScreen> {
               children: [
                 CircleAvatar(
                   backgroundImage: NetworkImage(
-                    userData?['profilePicture'] ??
+                    userData?['profilePicUrl'] ??
                         'https://via.placeholder.com/150',
                   ),
                   radius: 20,

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class SignUppage extends StatefulWidget {
   final void Function()? onTap;
@@ -41,11 +42,22 @@ class _SignUppageState extends State<SignUppage> {
       _isLoading = true;
     });
     try {
-      await _auth.createUserWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
-      // Navigation will be handled by the AuthGate
+      // Create user with Firebase Auth
+      UserCredential userCredential = await _auth
+          .createUserWithEmailAndPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
+
+      // Create a user document in Firestore
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userCredential.user!.uid)
+          .set({
+            'username': _usernameController.text.trim(),
+            'email': _emailController.text.trim(),
+            'profilePicUrl': '',
+          });
     } on FirebaseAuthException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
