@@ -2,6 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:pay_go/firebase_options.dart';
 import 'package:pay_go/pages/auth_gate.dart';
+import 'package:pay_go/services/api_service.dart';
 
 // You will need to generate this file using the FlutterFire CLI
 // import 'firebase_options.dart';
@@ -15,6 +16,7 @@ void main() async {
     options: DefaultFirebaseOptions
         .currentPlatform, // Uncomment this line after generating firebase_options.dart
   );
+  await ApiService().initialize();
   runApp(const MyApp());
 }
 

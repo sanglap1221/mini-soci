@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:pay_go/services/api_service.dart';
 
 class ChatScreen extends StatefulWidget {
   final String chatId;
@@ -19,6 +20,7 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+  final _apiService = ApiService();
 
   @override
   void initState() {
@@ -69,21 +71,27 @@ class _ChatScreenState extends State<ChatScreen> {
               .doc(widget.otherUserId)
               .get(),
           builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return Text('Loading...');
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Text('Loading...');
             }
-            final userData = snapshot.data?.data() as Map<String, dynamic>?;
+            if (!snapshot.hasData) {
+              return const Text('Unknown User');
+            }
+            final userData = snapshot.data?.data() as Map<String, dynamic>? ?? {};
+            final displayName = userData['username'] as String? ?? 'Unknown User';
+            final avatarUrl = _toFullImageUrl(_extractAvatarPath(userData));
+
             return Row(
               children: [
                 CircleAvatar(
-                  backgroundImage: NetworkImage(
-                    userData?['profilePicUrl'] ??
-                        'https://via.placeholder.com/150',
-                  ),
                   radius: 20,
+                  backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
+                  child: avatarUrl == null
+                      ? const Icon(Icons.person, size: 20)
+                      : null,
                 ),
-                SizedBox(width: 8),
-                Text(userData?['username'] ?? 'Unknown User'),
+                const SizedBox(width: 8),
+                Text(displayName),
               ],
             );
           },
@@ -101,11 +109,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   .snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
-                  return Center(child: Text('Something went wrong'));
+                  return const Center(child: Text('Something went wrong'));
                 }
 
                 if (snapshot.connectionState == ConnectionState.waiting) {
-                  return Center(child: CircularProgressIndicator());
+                  return const Center(child: CircularProgressIndicator());
                 }
 
                 final messages = snapshot.data?.docs ?? [];
@@ -123,11 +131,11 @@ class _ChatScreenState extends State<ChatScreen> {
                           ? Alignment.centerRight
                           : Alignment.centerLeft,
                       child: Container(
-                        margin: EdgeInsets.symmetric(
+                        margin: const EdgeInsets.symmetric(
                           horizontal: 8,
                           vertical: 4,
                         ),
-                        padding: EdgeInsets.symmetric(
+                        padding: const EdgeInsets.symmetric(
                           horizontal: 16,
                           vertical: 8,
                         ),
@@ -149,7 +157,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
           Container(
-            padding: EdgeInsets.all(8),
+            padding: const EdgeInsets.all(8),
             child: Row(
               children: [
                 Expanded(
@@ -160,17 +168,80 @@ class _ChatScreenState extends State<ChatScreen> {
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(25),
                       ),
-                      contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
                     ),
                   ),
                 ),
-                SizedBox(width: 8),
-                IconButton(icon: Icon(Icons.send), onPressed: _sendMessage),
+                const SizedBox(width: 8),
+                IconButton(icon: const Icon(Icons.send), onPressed: _sendMessage),
               ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  String? _toFullImageUrl(String? path) {
+    if (path == null || path.isEmpty) return null;
+    return _apiService.getFullImageUrl(path);
+  }
+
+  String? _extractAvatarPath(
+    Map<String, dynamic> userData, {
+    bool checkNested = true,
+  }) {
+    dynamic raw = userData['profilePicUrl'] ??
+        userData['profilePicture'] ??
+        userData['photoUrl'] ??
+        userData['avatar'];
+
+    if (raw == null && checkNested) {
+      final profileSection = userData['profile'];
+      if (profileSection is Map<String, dynamic>) {
+        final nested = _extractAvatarPath(profileSection, checkNested: false);
+        if (nested != null) {
+          raw = nested;
+        }
+      }
+
+      if (raw == null) {
+        final authorSection = userData['author'];
+        if (authorSection is Map<String, dynamic>) {
+          final nested = _extractAvatarPath(authorSection, checkNested: false);
+          if (nested != null) {
+            raw = nested;
+          }
+        }
+      }
+    }
+
+    if (raw == null) return null;
+
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return null;
+      return trimmed;
+    }
+
+    if (raw is Map) {
+      final dynamic candidate = [
+        raw['secureUrl'],
+        raw['secure_url'],
+        raw['url'],
+        raw['path'],
+        raw['downloadUrl'],
+        raw['downloadURL'],
+      ].firstWhere(
+        (value) => value is String && value.trim().isNotEmpty,
+        orElse: () => null,
+      );
+
+      if (candidate is String) {
+        return candidate.trim();
+      }
+    }
+
+    return null;
   }
 }

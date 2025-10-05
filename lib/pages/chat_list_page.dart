@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -18,8 +21,63 @@ class _ChatListPageState extends State<ChatListPage> {
 
   final Map<String, String?> _avatarCache = {};
   final Map<String, Future<String?>> _avatarFutureCache = {};
+  final Set<String> _failedAvatarUrls = <String>{};
+  final Map<String, String> _usernameOverrides = <String, String>{};
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _userSubscription;
+
+  String _getChatId(String currentUserId, String otherUserId) {
+    final ids = [currentUserId, otherUserId];
+    ids.sort();
+    return ids.join('_');
+  }
+
+  String? _otherParticipantId(String currentUserId, List<String> participants) {
+    for (final participant in participants) {
+      if (participant != currentUserId) {
+        return participant;
+      }
+    }
+    return null;
+  }
+
+  void _listenForUserUpdates() {
+    _userSubscription?.cancel();
+    _userSubscription = _firestore.collection('users').snapshots().listen(
+      (snapshot) {
+        final updates = <String, String>{};
+        for (final doc in snapshot.docs) {
+          final username = (doc.data()['username'] as String?)?.trim();
+          if (username != null && username.isNotEmpty) {
+            updates[doc.id] = username;
+          }
+        }
+
+        if (!mounted) return;
+        if (mapEquals(_usernameOverrides, updates)) return;
+
+        setState(() {
+          _usernameOverrides
+            ..clear()
+            ..addAll(updates);
+        });
+      },
+      onError: (err) =>
+          debugPrint('ChatListPage user subscription error: $err'),
+    );
+  }
 
   @override
+  void initState() {
+    super.initState();
+    _listenForUserUpdates();
+  }
+
+  @override
+  void dispose() {
+    _userSubscription?.cancel();
+    super.dispose();
+  }
+
   Widget build(BuildContext context) {
     final currentUser = _auth.currentUser;
 
@@ -37,91 +95,129 @@ class _ChatListPageState extends State<ChatListPage> {
             .where('participants', arrayContains: currentUser.uid)
             .orderBy('lastMessageTime', descending: true)
             .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
+        builder: (context, chatSnapshot) {
+          if (chatSnapshot.hasError) {
             return _buildStatusMessage(
               icon: Icons.error_outline,
-              message: 'Something went wrong loading your chats.',
+              message: 'Something went wrong loading chats.',
             );
           }
 
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (chatSnapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          final chatDocs = snapshot.data?.docs ?? [];
-          if (chatDocs.isEmpty) {
-            return _buildStatusMessage(
-              icon: Icons.chat_bubble_outline,
-              message: 'No conversations yet.\nStart a chat from the feed!',
-            );
+          final chatDocs = chatSnapshot.data?.docs ?? [];
+          final Map<String, Map<String, dynamic>> chatDataByUserId = {};
+
+          for (final doc in chatDocs) {
+            final data = doc.data();
+            final participants = (data['participants'] as List<dynamic>?)
+                ?.whereType<String>()
+                .toList();
+            if (participants == null || participants.isEmpty) {
+              continue;
+            }
+
+            final otherId = _otherParticipantId(currentUser.uid, participants);
+            if (otherId == null) continue;
+            chatDataByUserId[otherId] = data;
           }
 
-          return ListView.separated(
-            itemCount: chatDocs.length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
-            itemBuilder: (context, index) {
-              final chatDoc = chatDocs[index];
-              final chatData = chatDoc.data();
-
-              final participants = List<String>.from(
-                (chatData['participants'] ?? <dynamic>[]).cast<String>(),
-              );
-
-              final otherUserId = participants.firstWhere(
-                (id) => id != currentUser.uid,
-                orElse: () => '',
-              );
-
-              if (otherUserId.isEmpty) {
-                return const SizedBox.shrink();
+          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _firestore
+                .collection('users')
+                .orderBy('username')
+                .snapshots(),
+            builder: (context, userSnapshot) {
+              if (userSnapshot.hasError) {
+                return _buildStatusMessage(
+                  icon: Icons.error_outline,
+                  message: 'Something went wrong loading users.',
+                );
               }
 
-              final lastMessage =
-                  (chatData['lastMessage'] as String?)?.trim() ?? '';
-              final formattedTime = _formatTimestamp(
-                chatData['lastMessageTime'],
-              );
+              if (userSnapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
 
-              return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                stream: _firestore
-                    .collection('users')
-                    .doc(otherUserId)
-                    .snapshots(),
-                builder: (context, userSnapshot) {
-                  if (userSnapshot.hasError) {
-                    return const ListTile(
-                      title: Text('Unable to load this chat'),
-                    );
-                  }
+              final allUsers =
+                  userSnapshot.data?.docs
+                      .where((doc) => doc.id != currentUser.uid)
+                      .toList() ??
+                  [];
 
-                  if (userSnapshot.connectionState == ConnectionState.waiting) {
-                    return ListTile(
-                      leading: _avatarLoadingCircle(),
-                      title: const Text('Loading...'),
-                      subtitle: Text(
-                        _fallbackSubtitle(lastMessage),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Colors.grey.shade600,
-                          fontSize: 14,
-                        ),
-                      ),
-                      trailing: formattedTime != null
-                          ? Text(
-                              formattedTime,
-                              style: TextStyle(
-                                color: Colors.grey.shade500,
-                                fontSize: 12,
-                              ),
-                            )
-                          : null,
-                    );
-                  }
+              if (allUsers.isEmpty) {
+                return _buildStatusMessage(
+                  icon: Icons.chat_bubble_outline,
+                  message: 'You can start a conversation.',
+                );
+              }
 
-                  final userData = userSnapshot.data?.data() ?? {};
-                  final displayName = (userData['username'] as String?)?.trim();
+              final Map<String, QueryDocumentSnapshot<Map<String, dynamic>>>
+              userById = {for (final doc in allUsers) doc.id: doc};
+
+              final chatUsers = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+              final seenChatUserIds = <String>{};
+
+              for (final doc in chatDocs) {
+                final data = doc.data();
+                final participants = (data['participants'] as List<dynamic>?)
+                    ?.whereType<String>()
+                    .toList();
+                if (participants == null || participants.isEmpty) {
+                  continue;
+                }
+
+                final otherId = _otherParticipantId(
+                  currentUser.uid,
+                  participants,
+                );
+                if (otherId == null || seenChatUserIds.contains(otherId)) {
+                  continue;
+                }
+
+                final userDoc = userById[otherId];
+                if (userDoc != null) {
+                  chatUsers.add(userDoc);
+                  seenChatUserIds.add(otherId);
+                }
+              }
+
+              final nonChatUsers = allUsers
+                  .where((doc) => !seenChatUserIds.contains(doc.id))
+                  .toList();
+
+              final finalList = [...chatUsers, ...nonChatUsers];
+
+              if (finalList.isEmpty) {
+                return _buildStatusMessage(
+                  icon: Icons.chat_bubble_outline,
+                  message: 'You can start a conversation.',
+                );
+              }
+
+              return ListView.builder(
+                itemCount: finalList.length,
+                itemBuilder: (context, index) {
+                  final userDoc = finalList[index];
+                  final userData = userDoc.data();
+                  final otherUserId = userDoc.id;
+                  final displayName = _resolveUsernameForUserDoc(
+                    userDoc.id,
+                    userData,
+                  );
+
+                  final chatData = chatDataByUserId[otherUserId];
+                  final lastMessage =
+                      (chatData?['lastMessage'] as String?) ?? '';
+                  final lastMessageTimeText = _formatTimestamp(
+                    chatData?['lastMessageTime'],
+                  );
+                  final participantsList =
+                      (chatData?['participants'] as List<dynamic>?)
+                          ?.whereType<String>()
+                          .toList();
 
                   return ListTile(
                     leading: _buildAvatarWidget(
@@ -129,37 +225,49 @@ class _ChatListPageState extends State<ChatListPage> {
                       userData: userData,
                       displayName: displayName,
                     ),
-                    title: Text(
-                      displayName ?? 'Unknown user',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      _fallbackSubtitle(lastMessage),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.grey.shade600,
-                        fontSize: 14,
-                      ),
-                    ),
-                    trailing: formattedTime != null
+                    trailing: lastMessageTimeText != null
                         ? Text(
-                            formattedTime,
+                            lastMessageTimeText,
                             style: TextStyle(
-                              color: Colors.grey.shade500,
+                              color: Colors.grey[500],
                               fontSize: 12,
+                              fontWeight: FontWeight.w500,
                             ),
                           )
-                        : null,
-                    onTap: () => _openChat(
-                      chatDoc.id,
-                      otherUserId,
-                      participants: participants,
+                        : Icon(
+                            Icons.chat_bubble_outline,
+                            color: Colors.grey[400],
+                            size: 20,
+                          ),
+                    title: Text(
+                      displayName,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _fallbackSubtitle(lastMessage),
+                          style: _getSubtitleStyle(lastMessage),
+                        ),
+                      ],
+                    ),
+                    onTap: () {
+                      final chatId = _getChatId(currentUser.uid, otherUserId);
+                      final resolvedParticipants =
+                          (participantsList != null &&
+                              participantsList.isNotEmpty)
+                          ? participantsList
+                          : [currentUser.uid, otherUserId];
+                      _openChat(
+                        chatId,
+                        otherUserId,
+                        participants: resolvedParticipants,
+                      );
+                    },
                   );
                 },
               );
@@ -172,6 +280,16 @@ class _ChatListPageState extends State<ChatListPage> {
 
   static String _fallbackSubtitle(String lastMessage) {
     return lastMessage.isNotEmpty ? lastMessage : 'Start a chat now';
+  }
+
+  TextStyle _getSubtitleStyle(String lastMessage) {
+    if (lastMessage.isEmpty) {
+      // Style for the "Start a chat now" fallback message
+      return TextStyle(color: Colors.grey[400], fontSize: 12);
+    } else {
+      // Style for an actual last message (e.g., normal text color)
+      return TextStyle(color: Colors.grey[600], fontSize: 14);
+    }
   }
 
   Widget _buildStatusMessage({
@@ -248,7 +366,9 @@ class _ChatListPageState extends State<ChatListPage> {
     final directPath = _extractAvatarPath(userData);
     final directUrl = _toFullImageUrl(directPath);
 
-    if (directUrl != null && directUrl.isNotEmpty) {
+    if (directUrl != null &&
+        directUrl.isNotEmpty &&
+        !_failedAvatarUrls.contains(directUrl)) {
       _avatarCache[userId] = directUrl;
       return _avatarCircleFromUrl(directUrl, displayName);
     }
@@ -263,7 +383,9 @@ class _ChatListPageState extends State<ChatListPage> {
         final profileData = await _apiService.getProfile(userId);
         final profilePath = _extractAvatarPath(profileData);
         final resolvedUrl = _toFullImageUrl(profilePath);
-        _avatarCache[userId] = resolvedUrl;
+        if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
+          _avatarCache[userId] = resolvedUrl;
+        }
         return resolvedUrl;
       } catch (e) {
         debugPrint('Failed to fetch avatar for $userId: $e');
@@ -280,7 +402,9 @@ class _ChatListPageState extends State<ChatListPage> {
         }
 
         final resolvedUrl = snapshot.data ?? _avatarCache[userId];
-        if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
+        if (resolvedUrl != null &&
+            resolvedUrl.isNotEmpty &&
+            !_failedAvatarUrls.contains(resolvedUrl)) {
           return _avatarCircleFromUrl(resolvedUrl, displayName);
         }
 
@@ -321,6 +445,8 @@ class _ChatListPageState extends State<ChatListPage> {
             );
           },
           errorBuilder: (context, error, stackTrace) {
+            _failedAvatarUrls.add(avatarUrl);
+            _avatarCache.removeWhere((key, value) => value == avatarUrl);
             debugPrint('Avatar load error for $avatarUrl: $error');
             return SizedBox.expand(child: _avatarInitial(displayName));
           },
@@ -410,6 +536,26 @@ class _ChatListPageState extends State<ChatListPage> {
         ? ''
         : '/${dateTime.year.toString().substring(2)}';
     return '$day/$month$yearSuffix';
+  }
+
+  String _resolveUsernameForUserDoc(
+    String userId,
+    Map<String, dynamic> userData,
+  ) {
+    final override = _usernameOverrides[userId];
+    if (override != null && override.trim().isNotEmpty) return override.trim();
+
+    final name = (userData['username'] as String?)?.trim();
+    if (name != null && name.isNotEmpty) return name;
+
+    final displayName = _auth.currentUser?.uid == userId
+        ? _auth.currentUser?.displayName
+        : null;
+    if (displayName != null && displayName.trim().isNotEmpty) {
+      return displayName.trim();
+    }
+
+    return 'Unknown User';
   }
 
   String? _toFullImageUrl(String? path) {

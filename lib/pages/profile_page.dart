@@ -1,9 +1,11 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/api_service.dart';
+import '../utils/image_crop_helper.dart';
+import '../utils/post_viewer.dart';
+import '../utils/time_formatter.dart';
 import 'chat_screen.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -47,25 +49,21 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadProfile() async {
+    if (!mounted) return;
     try {
-      // No need to check for null, profileUserId is always set in initState
-      if (mounted) {
-        final data = await _apiService.getProfile(profileUserId);
-        print('Profile data loaded: $data'); // Debug log
-        if (mounted) {
-          setState(() {
-            _userData = data;
-          });
-          _refreshUserPosts();
-        }
-      }
+      final data = await _apiService.getProfile(profileUserId);
+      debugPrint('Profile data loaded: $data');
+      if (!mounted) return;
+      setState(() {
+        _userData = data;
+      });
+      _refreshUserPosts();
     } catch (e) {
-      print('Error loading profile: $e'); // Debug log
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to load profile')));
-      }
+      debugPrint('Error loading profile: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Failed to load profile')));
     }
   }
 
@@ -82,7 +80,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: Text('Edit Bio'),
         content: TextField(
           controller: controller,
@@ -95,7 +93,7 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: Text('Cancel'),
           ),
           TextButton(
@@ -105,10 +103,12 @@ class _ProfilePageState extends State<ProfilePage> {
                   username: _userData!['username'],
                   bio: controller.text.trim(),
                 );
+                if (!mounted) return;
                 setState(() {
                   _userData = {..._userData!, 'bio': controller.text.trim()};
                 });
-                Navigator.pop(context);
+                if (!dialogContext.mounted) return;
+                Navigator.pop(dialogContext);
               }
             },
             child: Text('Save'),
@@ -128,7 +128,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: Text('Edit Username'),
         content: TextField(
           controller: controller,
@@ -136,23 +136,41 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
         actions: [
           TextButton(
-            onPressed: () => {Navigator.pop(context)},
+            onPressed: () => {Navigator.pop(dialogContext)},
             child: Text('Cancel'),
           ),
           TextButton(
             onPressed: () async {
               if (controller.text.trim().isNotEmpty && _userData != null) {
+                final newUsername = controller.text.trim();
                 await _apiService.updateProfile(
-                  username: controller.text.trim(),
+                  username: newUsername,
                   bio: _userData!['bio'] ?? '',
                 );
+
+                final currentUser = FirebaseAuth.instance.currentUser;
+                try {
+                  await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(profileUserId)
+                      .set({'username': newUsername}, SetOptions(merge: true));
+                } catch (e) {
+                  debugPrint('Failed to sync username to Firestore: $e');
+                }
+
+                if (currentUser != null) {
+                  try {
+                    await currentUser.updateDisplayName(newUsername);
+                  } catch (e) {
+                    debugPrint('Failed to update auth display name: $e');
+                  }
+                }
+                if (!mounted) return;
                 setState(() {
-                  _userData = {
-                    ..._userData!,
-                    'username': controller.text.trim(),
-                  };
+                  _userData = {..._userData!, 'username': newUsername};
                 });
-                Navigator.pop(context);
+                if (!dialogContext.mounted) return;
+                Navigator.pop(dialogContext);
               }
             },
             child: Text('Save'),
@@ -163,73 +181,118 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _pickImage() async {
+    File? previousLocalImage = _localProfileImage;
+
     try {
-      final ImagePicker picker = ImagePicker();
-      final XFile? image = await picker.pickImage(
-        source: ImageSource.gallery,
-        maxHeight: 1024,
-        maxWidth: 1024,
-        imageQuality: 85,
+      final croppedFile = await ImageCropHelper.pickAvatar(context);
+      if (croppedFile == null) return;
+
+      if (!mounted) return;
+      final confirmed = await _showAvatarConfirmationSheet(croppedFile);
+      if (confirmed != true || !mounted) return;
+
+      setState(() {
+        _localProfileImage = croppedFile;
+      });
+
+      await _uploadProfilePicture(croppedFile);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _localProfileImage = previousLocalImage;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceAll('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ),
       );
+    }
+  }
 
-      if (image != null) {
-        setState(() {
-          _localProfileImage = File(image.path);
-        });
-
-        // Show loading indicator
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
+  Future<bool?> _showAvatarConfirmationSheet(File croppedFile) {
+    return showModalBottomSheet<bool>(
+      context: context,
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Use this profile picture?',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 24),
+            CircleAvatar(
+              radius: 70,
+              backgroundColor: Colors.grey[300],
+              child: ClipOval(
+                child: Image.file(
+                  croppedFile,
+                  width: 140,
+                  height: 140,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Row(
               children: [
-                CircularProgressIndicator(color: Colors.white),
-                SizedBox(width: 16),
-                Text('Uploading profile picture...'),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(sheetContext).pop(false),
+                    child: const Text('Retake'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(sheetContext).pop(true),
+                    child: const Text('Use Photo'),
+                  ),
+                ),
               ],
             ),
-            duration: Duration(seconds: 1),
-          ),
-        );
+          ],
+        ),
+      ),
+    );
+  }
 
-        // Upload profile picture using the API service
-        final result = await _apiService.updateProfilePicture(
-          _localProfileImage!,
-        );
+  Future<void> _uploadProfilePicture(File file) async {
+    final messenger = ScaffoldMessenger.of(context);
 
-        // Update the user document in Firestore
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(profileUserId)
-            .update({'profilePicUrl': result['profilePicUrl']});
+    messenger.showSnackBar(
+      SnackBar(
+        content: Row(
+          children: const [
+            CircularProgressIndicator(color: Colors.white),
+            SizedBox(width: 16),
+            Text('Uploading profile picture...'),
+          ],
+        ),
+        duration: const Duration(seconds: 1),
+      ),
+    );
 
-        // Update the UI with the new profile picture URL
-        if (mounted) {
-          setState(() {
-            _userData = {
-              ..._userData!,
-              'profilePicUrl': result['profilePicUrl'],
-            };
-          });
-          // Show success message
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Profile picture updated successfully'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      // Show error message with specific error details
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString().replaceAll('Exception: ', '')),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
+    final result = await _apiService.updateProfilePicture(file);
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(profileUserId)
+        .update({'profilePicUrl': result['profilePicUrl']});
+
+    if (!mounted) return;
+    setState(() {
+      _userData = {...?_userData, 'profilePicUrl': result['profilePicUrl']};
+    });
+
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('Profile picture updated successfully'),
+        backgroundColor: Colors.green,
+      ),
+    );
   }
 
   Widget _buildProfilePicture(Map<String, dynamic>? userData) {
@@ -295,6 +358,445 @@ class _ProfilePageState extends State<ProfilePage> {
       ],
     );
   }
+
+  Widget _buildProfileHeader() {
+    final username = _userData?['username'] ?? 'Username';
+    final bio = _userData?['bio'] as String?;
+
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        children: [
+          _buildProfilePicture(_userData),
+          const SizedBox(height: 16),
+          if (isCurrentUserProfile)
+            GestureDetector(
+              onTap: () => _editUsername(context, username),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    username,
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Icon(Icons.edit, size: 20),
+                ],
+              ),
+            )
+          else
+            Text(
+              username,
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+          const SizedBox(height: 8),
+          if (isCurrentUserProfile)
+            GestureDetector(
+              onTap: () => _editBio(context, bio ?? ''),
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  children: [
+                    Text(
+                      bio?.isNotEmpty == true ? bio! : 'Tap to add bio',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: bio == null || bio.isEmpty
+                            ? Colors.grey
+                            : Colors.black,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Icon(Icons.edit, size: 16),
+                  ],
+                ),
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Text(
+                bio?.isNotEmpty == true ? bio! : 'No bio available.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey[600]),
+              ),
+            ),
+          if (!isCurrentUserProfile)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16.0),
+              child: ElevatedButton.icon(
+                onPressed: _startChat,
+                icon: const Icon(Icons.message_outlined),
+                label: const Text('Message'),
+                style: ElevatedButton.styleFrom(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPostsSection() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            child: Text(
+              'Posts',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+          ),
+          FutureBuilder<List<dynamic>>(
+            future: _userPostsFuture,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 32.0),
+                  child: Center(
+                    child: Text('Error loading posts: ${snapshot.error}'),
+                  ),
+                );
+              }
+
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 32.0),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+
+              final posts = snapshot.data ?? const [];
+              if (posts.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 32.0),
+                  child: Center(
+                    child: Text(
+                      'No posts yet',
+                      style: TextStyle(color: Colors.grey[600], fontSize: 16),
+                    ),
+                  ),
+                );
+              }
+
+              return _buildPostGrid(posts);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPostGrid(List<dynamic> posts) {
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.all(4),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 4,
+        mainAxisSpacing: 4,
+      ),
+      itemCount: posts.length,
+      itemBuilder: (context, index) {
+        final rawPost = posts[index];
+        final post = rawPost is Map<String, dynamic>
+            ? rawPost
+            : <String, dynamic>{'imageUrl': '', 'caption': '', 'createdAt': ''};
+        return _buildPostTile(context, post);
+      },
+    );
+  }
+
+  Widget _buildPostTile(BuildContext context, Map<String, dynamic> post) {
+    final imagePath = post['imageUrl'] as String?;
+    final caption = post['caption']?.toString();
+    final createdAt = post['createdAt'];
+    final formattedInfo = formatTimestamp(createdAt);
+    final postId = _extractPostId(post);
+    final likeCount = _readLikeCount(post) ?? 0;
+    final commentCount = _readCommentCount(post) ?? 0;
+    final isLiked = _readIsLiked(post) ?? false;
+
+    return GestureDetector(
+      onTap: () {
+        PostViewer.show(
+          context: context,
+          apiService: _apiService,
+          relativeImagePath: imagePath,
+          caption: caption,
+          infoText: formattedInfo != null ? 'Posted $formattedInfo' : null,
+          postId: postId,
+          initialLikeCount: likeCount,
+          initialCommentCount: commentCount,
+          initialIsLiked: isLiked,
+          onInteractionChanged: postId == null
+              ? null
+              : (interaction) {
+                  if (!mounted) return;
+                  setState(() {
+                    final currentLikeCount = _readLikeCount(post) ?? likeCount;
+                    final currentCommentCount =
+                        _readCommentCount(post) ?? commentCount;
+                    final currentIsLiked = _readIsLiked(post) ?? isLiked;
+
+                    final nextLikeCount = interaction.likeCount != null
+                        ? _clampNonNegative(interaction.likeCount!)
+                        : currentLikeCount;
+                    final nextCommentCount = interaction.commentCount != null
+                        ? _clampNonNegative(interaction.commentCount!)
+                        : currentCommentCount;
+                    final nextIsLiked = interaction.isLiked ?? currentIsLiked;
+
+                    _applyInteractionUpdatesToPost(
+                      post,
+                      likeCount: nextLikeCount,
+                      commentCount: nextCommentCount,
+                      isLiked: nextIsLiked,
+                    );
+                  });
+                },
+        );
+      },
+      onLongPress: isCurrentUserProfile
+          ? () => _showPostOptions(context, post)
+          : null,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: Colors.grey[300]!, width: 0.5),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _buildPostImageWidget(imagePath),
+              _buildPostTileOverlay(likeCount, commentCount),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPostImageWidget(
+    String? relativeUrl, {
+    BoxFit fit = BoxFit.cover,
+  }) {
+    final resolvedUrl = _resolvePostImageUrl(relativeUrl);
+    if (resolvedUrl == null) {
+      return Container(
+        color: Colors.grey[200],
+        child: const Icon(Icons.image, color: Colors.grey),
+      );
+    }
+
+    return Image.network(
+      resolvedUrl,
+      fit: fit,
+      loadingBuilder: (context, child, loadingProgress) {
+        if (loadingProgress == null) return child;
+        return Container(
+          color: Colors.grey[200],
+          child: Center(
+            child: CircularProgressIndicator(
+              value: loadingProgress.expectedTotalBytes != null
+                  ? loadingProgress.cumulativeBytesLoaded /
+                        loadingProgress.expectedTotalBytes!
+                  : null,
+              strokeWidth: 2,
+            ),
+          ),
+        );
+      },
+      errorBuilder: (context, error, stackTrace) {
+        return Container(
+          color: Colors.grey[200],
+          child: const Icon(Icons.error_outline, color: Colors.grey),
+        );
+      },
+    );
+  }
+
+  String? _resolvePostImageUrl(String? relativeUrl) {
+    if (relativeUrl == null || relativeUrl.isEmpty) {
+      return null;
+    }
+    return _apiService.getFullImageUrl(relativeUrl);
+  }
+
+  Widget _buildPostTileOverlay(int likeCount, int commentCount) {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.bottomCenter,
+            end: Alignment.topCenter,
+            colors: [Colors.black54, Colors.transparent],
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.favorite, color: Colors.white, size: 14),
+            const SizedBox(width: 4),
+            Text(
+              '$likeCount',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Icon(
+              Icons.mode_comment_outlined,
+              color: Colors.white,
+              size: 14,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '$commentCount',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String? _extractPostId(Map<String, dynamic> post) {
+    final candidates = [post['_id'], post['id'], post['postId'], post['uuid']];
+    for (final candidate in candidates) {
+      if (candidate is String && candidate.isNotEmpty) {
+        return candidate;
+      }
+      if (candidate is int) {
+        return candidate.toString();
+      }
+    }
+    return null;
+  }
+
+  int? _readLikeCount(Map<String, dynamic> post) {
+    final candidates = [
+      post['likeCount'],
+      post['likes'],
+      post['likesCount'],
+      post['totalLikes'],
+    ];
+    for (final candidate in candidates) {
+      final parsed = _asInt(candidate);
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  int? _readCommentCount(Map<String, dynamic> post) {
+    final candidates = [
+      post['commentCount'],
+      post['comments'],
+      post['commentsCount'],
+      post['totalComments'],
+    ];
+    for (final candidate in candidates) {
+      final parsed = _asInt(candidate);
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  bool? _readIsLiked(Map<String, dynamic> post) {
+    final candidates = [
+      post['viewerHasLiked'],
+      post['likedByCurrentUser'],
+      post['isLiked'],
+      post['liked'],
+      post['hasLiked'],
+    ];
+    for (final candidate in candidates) {
+      final parsed = _asBool(candidate);
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  void _applyInteractionUpdatesToPost(
+    Map<String, dynamic> post, {
+    int? likeCount,
+    int? commentCount,
+    bool? isLiked,
+  }) {
+    if (likeCount != null) {
+      post['likeCount'] = likeCount;
+      post['likes'] = likeCount;
+      post['likesCount'] = likeCount;
+      post['totalLikes'] = likeCount;
+    }
+
+    if (commentCount != null) {
+      post['commentCount'] = commentCount;
+      post['comments'] = commentCount;
+      post['commentsCount'] = commentCount;
+      post['totalComments'] = commentCount;
+    }
+
+    if (isLiked != null) {
+      post['viewerHasLiked'] = isLiked;
+      post['likedByCurrentUser'] = isLiked;
+      post['isLiked'] = isLiked;
+      post['liked'] = isLiked;
+      post['hasLiked'] = isLiked;
+    }
+  }
+
+  int? _asInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) {
+      return int.tryParse(value);
+    }
+    return null;
+  }
+
+  bool? _asBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is String) {
+      final normalized = value.toLowerCase();
+      if (normalized == 'true' || normalized == '1') return true;
+      if (normalized == 'false' || normalized == '0') return false;
+    }
+    return null;
+  }
+
+  int _clampNonNegative(int value) => value < 0 ? 0 : value;
 
   void _showProfileOptions() {
     if (!_hasProfileImage) {
@@ -385,26 +887,29 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
     );
 
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
     try {
       await _apiService.deleteProfilePicture();
       if (!mounted) return;
-      Navigator.of(context).pop();
+      navigator.pop();
       setState(() {
         if (_userData != null) {
           _userData = {..._userData!, 'profilePicUrl': null};
         }
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
+      messenger.showSnackBar(
+        const SnackBar(
           content: Text('Profile picture removed'),
           backgroundColor: Colors.green,
         ),
       );
     } catch (e) {
       if (!mounted) return;
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
+      navigator.pop();
+      messenger.showSnackBar(
+        const SnackBar(
           content: Text('Failed to remove profile picture'),
           backgroundColor: Colors.red,
         ),
@@ -519,241 +1024,16 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
 
       body: _userData == null
-          ? Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                Expanded(
-                  child: RefreshIndicator(
-                    onRefresh: _loadProfile,
-                    child: ListView(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            children: [
-                              _buildProfilePicture(_userData),
-                              const SizedBox(height: 16),
-                              if (isCurrentUserProfile)
-                                // Show editable username for current user
-                                GestureDetector(
-                                  onTap: () => _editUsername(
-                                    context,
-                                    _userData?['username'] ?? 'Username',
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Text(
-                                        _userData?['username'] ?? 'Username',
-                                        style: const TextStyle(
-                                          fontSize: 24,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      const Icon(Icons.edit, size: 20),
-                                    ],
-                                  ),
-                                )
-                              else
-                                // Show non-editable username for other users
-                                Text(
-                                  _userData?['username'] ?? 'Username',
-                                  style: const TextStyle(
-                                    fontSize: 24,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              const SizedBox(height: 8),
-                              if (isCurrentUserProfile)
-                                // Show editable bio for current user
-                                GestureDetector(
-                                  onTap: () => _editBio(
-                                    context,
-                                    _userData?['bio'] ?? '',
-                                  ),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(8),
-                                    child: Column(
-                                      children: [
-                                        Text(
-                                          _userData?['bio'] ?? 'Tap to add bio',
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(
-                                            color: _userData?['bio'] == null
-                                                ? Colors.grey
-                                                : Colors.black,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        const Icon(Icons.edit, size: 16),
-                                      ],
-                                    ),
-                                  ),
-                                )
-                              else
-                                // Show non-editable bio for other users
-                                Padding(
-                                  padding: const EdgeInsets.all(8.0),
-                                  child: Text(
-                                    _userData?['bio'] ?? 'No bio available.',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(color: Colors.grey[600]),
-                                  ),
-                                ),
-                              if (!isCurrentUserProfile)
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 16.0,
-                                  ),
-                                  child: ElevatedButton.icon(
-                                    onPressed: _startChat,
-                                    icon: const Icon(Icons.message_outlined),
-                                    label: const Text('Message'),
-                                    style: ElevatedButton.styleFrom(
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 24,
-                                        vertical: 12,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                        const Divider(),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(
-                            vertical: 8.0,
-                            horizontal: 16.0,
-                          ),
-                          child: Text(
-                            'Posts',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        // Posts grid
-                        FutureBuilder<List<dynamic>>(
-                          future: _userPostsFuture,
-                          builder: (context, postsSnapshot) {
-                            if (postsSnapshot.hasError) {
-                              return Center(
-                                child: Text(
-                                  'Error loading posts: ${postsSnapshot.error}',
-                                ),
-                              );
-                            }
-
-                            if (postsSnapshot.connectionState ==
-                                ConnectionState.waiting) {
-                              return Center(child: CircularProgressIndicator());
-                            }
-
-                            final posts = postsSnapshot.data ?? [];
-
-                            if (posts.isEmpty) {
-                              return Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(16.0),
-                                  child: Text(
-                                    'No posts yet',
-                                    style: TextStyle(
-                                      color: Colors.grey[600],
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                ),
-                              );
-                            }
-
-                            return GridView.builder(
-                              shrinkWrap: true,
-                              physics: NeverScrollableScrollPhysics(),
-                              padding: EdgeInsets.all(4),
-                              gridDelegate:
-                                  SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: 3,
-                                    crossAxisSpacing: 4,
-                                    mainAxisSpacing: 4,
-                                  ),
-                              itemCount: posts.length,
-                              itemBuilder: (context, index) {
-                                final post = posts[index];
-                                return GestureDetector(
-                                  onTap: () {
-                                    // TODO: Navigate to post detail page
-                                  },
-                                  onLongPress: isCurrentUserProfile
-                                      ? () {
-                                          _showPostOptions(context, post);
-                                        }
-                                      : null,
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(4),
-                                      border: Border.all(
-                                        color: Colors.grey[300]!,
-                                        width: 0.5,
-                                      ),
-                                    ),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(4),
-                                      child: Image.network(
-                                        _apiService.getFullImageUrl(
-                                          post['imageUrl'] ?? '',
-                                        ),
-                                        fit: BoxFit.cover,
-                                        loadingBuilder: (context, child, loadingProgress) {
-                                          if (loadingProgress == null) {
-                                            return child;
-                                          }
-                                          return Container(
-                                            color: Colors.grey[200],
-                                            child: Center(
-                                              child: CircularProgressIndicator(
-                                                value:
-                                                    loadingProgress
-                                                            .expectedTotalBytes !=
-                                                        null
-                                                    ? loadingProgress
-                                                              .cumulativeBytesLoaded /
-                                                          loadingProgress
-                                                              .expectedTotalBytes!
-                                                    : null,
-                                                strokeWidth: 2,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                        errorBuilder:
-                                            (context, error, stackTrace) {
-                                              return Container(
-                                                color: Colors.grey[200],
-                                                child: Icon(
-                                                  Icons.error_outline,
-                                                  color: Colors.grey[400],
-                                                ),
-                                              );
-                                            },
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            );
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadProfile,
+              child: ListView(
+                children: [
+                  _buildProfileHeader(),
+                  const Divider(),
+                  _buildPostsSection(),
+                ],
+              ),
             ),
     );
   }
@@ -770,19 +1050,13 @@ class _ProfilePageState extends State<ProfilePage> {
               children: [
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: Image.network(
-                    _apiService.getFullImageUrl(post['imageUrl'] ?? ''),
+                  child: SizedBox(
                     width: 60,
                     height: 60,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        width: 60,
-                        height: 60,
-                        color: Colors.grey[300],
-                        child: Icon(Icons.image, color: Colors.grey[600]),
-                      );
-                    },
+                    child: _buildPostImageWidget(
+                      post['imageUrl'] as String?,
+                      fit: BoxFit.cover,
+                    ),
                   ),
                 ),
                 SizedBox(width: 12),
@@ -800,7 +1074,12 @@ class _ProfilePageState extends State<ProfilePage> {
                       ),
                       SizedBox(height: 4),
                       Text(
-                        'Posted ${_formatDate(post['createdAt'])}',
+                        () {
+                          final formatted = formatTimestamp(post['createdAt']);
+                          return formatted != null
+                              ? 'Posted $formatted'
+                              : 'Posted date unavailable';
+                        }(),
                         style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                       ),
                     ],
@@ -838,19 +1117,13 @@ class _ProfilePageState extends State<ProfilePage> {
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.network(
-                _apiService.getFullImageUrl(post['imageUrl'] ?? ''),
+              child: SizedBox(
                 width: 120,
                 height: 120,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    width: 120,
-                    height: 120,
-                    color: Colors.grey[300],
-                    child: Icon(Icons.image, color: Colors.grey[600]),
-                  );
-                },
+                child: _buildPostImageWidget(
+                  post['imageUrl'] as String?,
+                  fit: BoxFit.cover,
+                ),
               ),
             ),
             SizedBox(height: 12),
@@ -915,27 +1188,6 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
         );
       }
-    }
-  }
-
-  String _formatDate(String? dateString) {
-    if (dateString == null) return 'just now';
-    try {
-      final date = DateTime.parse(dateString).toLocal();
-      final difference = DateTime.now().difference(date);
-
-      if (difference.inDays >= 1) {
-        return '${difference.inDays} day${difference.inDays > 1 ? 's' : ''} ago';
-      }
-      if (difference.inHours >= 1) {
-        return '${difference.inHours} hour${difference.inHours > 1 ? 's' : ''} ago';
-      }
-      if (difference.inMinutes >= 1) {
-        return '${difference.inMinutes} minute${difference.inMinutes > 1 ? 's' : ''} ago';
-      }
-      return 'Just now';
-    } catch (_) {
-      return 'Just now';
     }
   }
 }

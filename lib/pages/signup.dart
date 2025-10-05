@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/api_service.dart';
 
 class SignUppage extends StatefulWidget {
   final void Function()? onTap;
@@ -16,6 +17,7 @@ class _SignUppageState extends State<SignUppage> {
   final _confirmPasswordController = TextEditingController();
   final _usernameController = TextEditingController();
   final _auth = FirebaseAuth.instance;
+  final _apiService = ApiService();
   bool _isLoading = false;
 
   //validate the password
@@ -31,33 +33,58 @@ class _SignUppageState extends State<SignUppage> {
   }
 
   void signUpUser() async {
-    if (_usernameController.text.trim().isEmpty) {
+    final username = _usernameController.text.trim();
+    if (username.isEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Please enter a username')));
+      ).showSnackBar(const SnackBar(content: Text('Please enter a username')));
       return;
     }
+
     if (!_validatePasswords()) return;
+
     setState(() {
       _isLoading = true;
     });
-    try {
-      // Create user with Firebase Auth
-      UserCredential userCredential = await _auth
-          .createUserWithEmailAndPassword(
-            email: _emailController.text.trim(),
-            password: _passwordController.text.trim(),
-          );
 
-      // Create a user document in Firestore
+    try {
+      final trimmedEmail = _emailController.text.trim();
+
+      // Create user with Firebase Auth
+      final userCredential = await _auth.createUserWithEmailAndPassword(
+        email: trimmedEmail,
+        password: _passwordController.text.trim(),
+      );
+
+      final newUser = userCredential.user;
+
+      // Create a user document in Firestore to keep existing consumers working
       await FirebaseFirestore.instance
           .collection('users')
-          .doc(userCredential.user!.uid)
+          .doc(newUser!.uid)
           .set({
-            'username': _usernameController.text.trim(),
-            'email': _emailController.text.trim(),
+            'username': username,
+            'email': trimmedEmail,
             'profilePicUrl': '',
           });
+
+      // Update Firebase Auth display name for fallbacks
+      await newUser.updateDisplayName(username);
+
+      // Sync username to backend profile API used by the Profile page
+      try {
+        await _apiService.updateProfile(username: username, bio: '');
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Account created, but syncing your profile failed. You can try editing it later.',
+              ),
+            ),
+          );
+        }
+      }
     } on FirebaseAuthException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(

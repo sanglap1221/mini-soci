@@ -34,15 +34,12 @@ class _HomepageState extends State<Homepage> {
   }
 
   Widget _getPage(int index) {
-    print('_getPage called with index: $index'); // Debug log
     switch (index) {
       case 0:
-        print('Creating new FeedPage instance'); // Debug log
         return FeedPage(refreshTrigger: _feedRefreshToken);
       case 1:
         return const ChatListPage();
       case 2:
-        print('Creating new ProfilePage instance'); // Debug log
         return ProfilePage();
       default:
         return const FeedPage();

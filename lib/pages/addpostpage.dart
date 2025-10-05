@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:pay_go/utils/image_crop_helper.dart';
 import '../services/api_service.dart';
 
 class Addpostpage extends StatefulWidget {
@@ -17,13 +17,12 @@ class _AddpostpageState extends State<Addpostpage> {
   bool _isLoading = false;
 
   Future<void> _pickImage() async {
-    final ImagePicker picker = ImagePicker();
-    final XFile? image = await picker.pickImage(source: ImageSource.gallery);
-    if (image != null) {
-      setState(() {
-        _image = File(image.path);
-      });
-    }
+    final file = await ImageCropHelper.pickPostImage(context);
+    if (file == null) return;
+    if (!mounted) return;
+    setState(() {
+      _image = file;
+    });
   }
 
   Future<void> _createPost() async {
@@ -75,9 +74,12 @@ class _AddpostpageState extends State<Addpostpage> {
       appBar: AppBar(
         title: Text('Create Post'),
         actions: [
-          IconButton(
-            icon: Icon(Icons.check),
-            onPressed: _isLoading ? null : _createPost,
+          Padding(
+            padding: const EdgeInsets.only(top: 6.0),
+            child: IconButton(
+              icon: const Icon(Icons.check),
+              onPressed: _isLoading ? null : _createPost,
+            ),
           ),
         ],
       ),

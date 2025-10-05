@@ -49,3 +49,7 @@ flutter {
 tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.add("-Xlint:deprecation")
 }
+
+dependencies {
+    implementation("androidx.appcompat:appcompat:1.7.0")
+}
