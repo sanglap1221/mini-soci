@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:pay_go/services/api_service.dart';
+import '../services/app_cache_managers.dart';
 import 'chat_screen.dart';
 
 class ChatListPage extends StatefulWidget {
@@ -78,6 +80,7 @@ class _ChatListPageState extends State<ChatListPage> {
     super.dispose();
   }
 
+  @override
   Widget build(BuildContext context) {
     final currentUser = _auth.currentUser;
 
@@ -422,29 +425,21 @@ class _ChatListPageState extends State<ChatListPage> {
       radius: 24,
       backgroundColor: Colors.grey[300],
       child: ClipOval(
-        child: Image.network(
-          avatarUrl,
+        child: CachedNetworkImage(
+          cacheManager: AppCacheManagers.imageCache,
+          imageUrl: avatarUrl,
           key: ValueKey(avatarUrl),
           width: 48,
           height: 48,
           fit: BoxFit.cover,
-          loadingBuilder: (context, child, loadingProgress) {
-            if (loadingProgress == null) return child;
-            return Center(
-              child: SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  value: loadingProgress.expectedTotalBytes != null
-                      ? loadingProgress.cumulativeBytesLoaded /
-                            loadingProgress.expectedTotalBytes!
-                      : null,
-                ),
-              ),
-            );
-          },
-          errorBuilder: (context, error, stackTrace) {
+          placeholder: (context, url) => const Center(
+            child: SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+          errorWidget: (context, url, error) {
             _failedAvatarUrls.add(avatarUrl);
             _avatarCache.removeWhere((key, value) => value == avatarUrl);
             debugPrint('Avatar load error for $avatarUrl: $error');

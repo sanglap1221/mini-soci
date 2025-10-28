@@ -1,18 +1,24 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
 import 'auth_token_provider.dart';
+import 'app_cache_managers.dart';
 import 'base_url_resolver.dart';
 
 class ApiService {
   ApiService._internal()
     : _baseUrlResolver = BaseUrlResolver(),
-      _authTokenProvider = AuthTokenProvider() {
+      _authTokenProvider = AuthTokenProvider(),
+      _apiCache = AppCacheManagers.apiCache,
+      _firestore = FirebaseFirestore.instance {
     _log('ApiService singleton instance created');
   }
 
@@ -21,6 +27,18 @@ class ApiService {
 
   final BaseUrlResolver _baseUrlResolver;
   final AuthTokenProvider _authTokenProvider;
+  final CacheManager _apiCache;
+  final FirebaseFirestore _firestore;
+
+  static const String _postsCacheKey = 'api.posts';
+
+  String _profileCacheKey(String userId) => 'api.profile.$userId';
+  String _commentsCacheKey(String postId) => 'api.comments.$postId';
+  String _relationshipSummaryCacheKey(String userId) =>
+      'api.relationship.summary.$userId';
+
+  CollectionReference<Map<String, dynamic>> get _notificationsCollection =>
+      _firestore.collection('notifications');
 
   Future<void> initialize({String? overrideBaseUrl}) async {
     await _baseUrlResolver.initialize(overrideBaseUrl: overrideBaseUrl);
@@ -42,18 +60,35 @@ class ApiService {
 
   Future<Map<String, dynamic>> createPost(
     String caption,
-    File imageFile,
-  ) async {
+    File mediaFile, {
+    required PostMediaType mediaType,
+  }) async {
     final token = await getFirebaseToken();
     if (token == null) throw Exception('Not authenticated');
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) throw Exception('Not authenticated');
     final resolvedBaseUrl = await _prepareBaseUrl();
 
-    final ext = imageFile.path.toLowerCase().split('.').last;
-    if (!['jpg', 'jpeg', 'png'].contains(ext)) {
-      throw Exception('Only JPG and PNG images are allowed');
+    final ext = mediaFile.path.split('.').last.toLowerCase();
+
+    if (mediaType == PostMediaType.image) {
+      if (!['jpg', 'jpeg', 'png'].contains(ext)) {
+        throw Exception('Only JPG and PNG images are allowed');
+      }
+    } else {
+      if (!['mp4', 'mov', 'avi'].contains(ext)) {
+        throw Exception('Only MP4, MOV, or AVI videos are allowed');
+      }
     }
 
-    _log('Creating post...');
+    await getProfile(currentUser.uid);
+
+    final fieldName = mediaType == PostMediaType.image ? 'image' : 'video';
+    final mediaTypeHeader = mediaType == PostMediaType.image
+        ? (ext == 'png'
+              ? MediaType('image', 'png')
+              : MediaType('image', 'jpeg'))
+        : MediaType('video', ext == 'mov' ? 'quicktime' : ext);
 
     final request =
         http.MultipartRequest('POST', Uri.parse('$resolvedBaseUrl/posts'))
@@ -62,9 +97,9 @@ class ApiService {
           ..fields['caption'] = caption.trim().isEmpty ? ' ' : caption.trim()
           ..files.add(
             await http.MultipartFile.fromPath(
-              'image',
-              imageFile.path,
-              contentType: MediaType('image', ext == 'png' ? 'png' : 'jpeg'),
+              fieldName,
+              mediaFile.path,
+              contentType: mediaTypeHeader,
             ),
           );
 
@@ -75,7 +110,9 @@ class ApiService {
     _log('Create Post Response Body: ${response.body}');
 
     if (response.statusCode == 201) {
-      return json.decode(response.body) as Map<String, dynamic>;
+      final decoded = json.decode(response.body) as Map<String, dynamic>;
+      unawaited(_invalidateCacheKey(_postsCacheKey));
+      return decoded;
     }
 
     throw Exception(
@@ -83,10 +120,18 @@ class ApiService {
     );
   }
 
-  Future<List<dynamic>> getPosts() async {
+  Future<List<dynamic>> getPosts({bool forceRefresh = false}) async {
+    if (!forceRefresh) {
+      final cached = await _readCachedJson(_postsCacheKey);
+      if (cached is List<dynamic>) {
+        return sortPostsByNewest(List<dynamic>.from(cached));
+      }
+    }
+
     final result = await _authorizedRequest(_HttpMethod.get, '/posts');
     final data = result.json;
     if (data is List<dynamic>) {
+      unawaited(_writeCacheEntry(_postsCacheKey, data));
       return sortPostsByNewest(data);
     }
     throw Exception('Unexpected response format for posts');
@@ -104,7 +149,18 @@ class ApiService {
     throw Exception('Unexpected response format for user posts');
   }
 
-  Future<Map<String, dynamic>> getProfile(String userId) async {
+  Future<Map<String, dynamic>> getProfile(
+    String userId, {
+    bool forceRefresh = false,
+  }) async {
+    final cacheKey = _profileCacheKey(userId);
+    if (!forceRefresh) {
+      final cached = await _readCachedJson(cacheKey);
+      if (cached is Map<String, dynamic>) {
+        return Map<String, dynamic>.from(cached);
+      }
+    }
+
     final result = await _authorizedRequest(
       _HttpMethod.get,
       '/users/$userId/profile',
@@ -114,6 +170,7 @@ class ApiService {
     if (result.statusCode == 200) {
       final data = result.json;
       if (data is Map<String, dynamic>) {
+        unawaited(_writeCacheEntry(cacheKey, data));
         return data;
       }
       throw Exception('Unexpected profile response format');
@@ -124,11 +181,13 @@ class ApiService {
     if (result.statusCode == 404) {
       if (userId == currentUserId) {
         _log('Profile not found, creating new profile...');
-        return updateProfile(
+        final createdProfile = await updateProfile(
           username:
               FirebaseAuth.instance.currentUser?.displayName ?? 'New User',
           bio: '',
         );
+        unawaited(_writeCacheEntry(cacheKey, createdProfile));
+        return createdProfile;
       }
       return <String, dynamic>{};
     }
@@ -150,11 +209,320 @@ class ApiService {
 
     final data = result.json;
     if (data is Map<String, dynamic>) {
+      final userId = FirebaseAuth.instance.currentUser?.uid;
+      if (userId != null) {
+        unawaited(_writeCacheEntry(_profileCacheKey(userId), data));
+      }
       return data;
     }
     throw Exception(
       'Failed to update profile: ${result.statusCode} ${result.body}',
     );
+  }
+
+  Future<RelationshipSummary> getRelationshipSummary(
+    String userId, {
+    bool forceRefresh = false,
+  }) async {
+    final cacheKey = _relationshipSummaryCacheKey(userId);
+    if (!forceRefresh) {
+      final cached = await _readCachedJson(cacheKey);
+      final cachedSummary = _parseRelationshipSummary(cached);
+      if (cachedSummary != null) {
+        return cachedSummary;
+      }
+    }
+
+    final result = await _authorizedRequest(
+      _HttpMethod.get,
+      '/friend/relationship/$userId',
+    );
+
+    final summary = _parseRelationshipSummary(result.json);
+    if (summary == null) {
+      throw Exception('Unexpected relationship summary format');
+    }
+    _cacheRelationshipSummary(userId, summary);
+    return summary;
+  }
+
+  Future<RelationshipSummary> sendFriendRequest(String userId) async {
+    final result = await _authorizedRequest(
+      _HttpMethod.post,
+      '/friend/request/$userId',
+      acceptedStatus: const [200, 201, 409],
+    );
+
+    if (result.statusCode == 409) {
+      RelationshipSummary? summary = _parseRelationshipSummary(result.json);
+      if (summary == null) {
+        try {
+          summary = await getRelationshipSummary(userId, forceRefresh: true);
+        } catch (e, stack) {
+          _log('Failed to refresh summary after 409: $e');
+          _log(stack.toString());
+        }
+      }
+
+      summary ??= RelationshipSummary(
+        status: RelationshipStatus.pendingIncoming,
+        pendingRequestId: _extractPendingRequestId(result.json),
+        followerCount: 0,
+        followingCount: 0,
+        friendCount: 0,
+      );
+
+      if (summary.status == RelationshipStatus.none) {
+        summary = summary.copyWith(status: RelationshipStatus.pendingIncoming);
+      }
+
+      if (summary.pendingRequestId == null) {
+        final pendingId = _extractPendingRequestId(result.json);
+        if (pendingId != null) {
+          summary = summary.copyWith(pendingRequestId: pendingId);
+        }
+      }
+
+      _applyRelationshipMutations(userId, summary);
+      return summary;
+    }
+
+    final pendingRequestId =
+        _extractPendingRequestId(result.json) ??
+        _extractPendingRequestId(result.body);
+
+    final summary = await _resolveRelationshipFromMutation(
+      result,
+      fallbackUserId: userId,
+      fallbackStatus: RelationshipStatus.pendingOutgoing,
+      fallbackPendingRequestId: pendingRequestId,
+    );
+
+    final normalizedSummary =
+        summary.status == RelationshipStatus.none && pendingRequestId != null
+        ? summary.copyWith(
+            status: RelationshipStatus.pendingOutgoing,
+            pendingRequestId: pendingRequestId,
+          )
+        : summary.pendingRequestId == null && pendingRequestId != null
+        ? summary.copyWith(pendingRequestId: pendingRequestId)
+        : summary;
+
+    _applyRelationshipMutations(userId, normalizedSummary);
+    return normalizedSummary;
+  }
+
+  Future<RelationshipSummary> cancelFriendRequest(
+    String requestId, {
+    String? targetUserId,
+  }) async {
+    _ApiResponse result;
+    try {
+      result = await _authorizedRequest(
+        _HttpMethod.post,
+        '/friend/request/$requestId/cancel',
+        acceptedStatus: const [200, 204],
+      );
+    } catch (e) {
+      final message = e.toString().toLowerCase();
+      if (!message.contains('404') && !message.contains('cannot post')) {
+        rethrow;
+      }
+
+      result = await _authorizedRequest(
+        _HttpMethod.delete,
+        '/friend/request/$requestId',
+        acceptedStatus: const [200, 202, 204],
+      );
+    }
+
+    final resolvedTargetUserId =
+        _extractTargetUserId(result.json) ?? targetUserId;
+    if (resolvedTargetUserId == null) {
+      throw Exception('Missing target user id for cancel response');
+    }
+
+    final summary = await _resolveRelationshipFromMutation(
+      result,
+      fallbackUserId: resolvedTargetUserId,
+      fallbackStatus: RelationshipStatus.none,
+    );
+    _applyRelationshipMutations(resolvedTargetUserId, summary);
+    return summary;
+  }
+
+  Future<RelationshipSummary> acceptFriendRequest(
+    String requestId, {
+    String? targetUserId,
+  }) async {
+    final result = await _authorizedRequest(
+      _HttpMethod.post,
+      '/friend/request/$requestId/accept',
+      acceptedStatus: const [200, 201],
+    );
+
+    final resolvedTargetUserId =
+        _extractTargetUserId(result.json) ?? targetUserId;
+    if (resolvedTargetUserId == null) {
+      throw Exception('Missing target user id for accept response');
+    }
+
+    final summary = await _resolveRelationshipFromMutation(
+      result,
+      fallbackUserId: resolvedTargetUserId,
+      fallbackStatus: RelationshipStatus.friends,
+    );
+    _applyRelationshipMutations(resolvedTargetUserId, summary);
+    return summary;
+  }
+
+  Future<RelationshipSummary> declineFriendRequest(
+    String requestId, {
+    String? targetUserId,
+  }) async {
+    final result = await _authorizedRequest(
+      _HttpMethod.post,
+      '/friend/request/$requestId/decline',
+      acceptedStatus: const [200, 201, 204],
+    );
+
+    final resolvedTargetUserId =
+        _extractTargetUserId(result.json) ?? targetUserId;
+    if (resolvedTargetUserId == null) {
+      throw Exception('Missing target user id for decline response');
+    }
+
+    final summary = await _resolveRelationshipFromMutation(
+      result,
+      fallbackUserId: resolvedTargetUserId,
+      fallbackStatus: RelationshipStatus.none,
+    );
+    _applyRelationshipMutations(resolvedTargetUserId, summary);
+    return summary;
+  }
+
+  Future<RelationshipSummary> unfriend(String userId) async {
+    final result = await _authorizedRequest(
+      _HttpMethod.delete,
+      '/friend/$userId',
+      acceptedStatus: const [200, 204],
+    );
+
+    final summary = await _resolveRelationshipFromMutation(
+      result,
+      fallbackUserId: userId,
+      fallbackStatus: RelationshipStatus.none,
+    );
+    _applyRelationshipMutations(userId, summary);
+    return summary;
+  }
+
+  /// Fetch notifications for the current user ordered by newest first.
+  Future<List<Map<String, dynamic>>> getNotifications({
+    int limit = 50,
+    bool unreadOnly = false,
+  }) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) throw Exception('Not authenticated');
+
+    Query<Map<String, dynamic>> query = _notificationsCollection.where(
+      'toUserId',
+      isEqualTo: uid,
+    );
+
+    if (unreadOnly) {
+      query = query.where('isRead', isEqualTo: false);
+    }
+
+    query = query.orderBy('createdAt', descending: true).limit(limit);
+
+    final snapshot = await query.get();
+    return snapshot.docs
+        .map((doc) => <String, dynamic>{'id': doc.id, ...doc.data()})
+        .toList(growable: false);
+  }
+
+  /// Mark a single notification as read for the current user.
+  Future<void> markNotificationAsRead(String notificationId) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) throw Exception('Not authenticated');
+
+    final docRef = _notificationsCollection.doc(notificationId);
+    final docSnapshot = await docRef.get();
+    final data = docSnapshot.data();
+
+    if (!docSnapshot.exists || data == null) {
+      return;
+    }
+
+    if ((data['toUserId'] as String?) != uid) {
+      throw Exception("Not authorized to update this notification");
+    }
+
+    await docRef.update(<String, dynamic>{
+      'isRead': true,
+      'readAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Mark all unread notifications as read for the current user.
+  Future<void> markAllNotificationsAsRead() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) throw Exception('Not authenticated');
+
+    final unreadQuery = await _notificationsCollection
+        .where('toUserId', isEqualTo: uid)
+        .where('isRead', isEqualTo: false)
+        .limit(100)
+        .get();
+
+    if (unreadQuery.docs.isEmpty) {
+      return;
+    }
+
+    final batch = _firestore.batch();
+    for (final doc in unreadQuery.docs) {
+      batch.update(doc.reference, <String, dynamic>{
+        'isRead': true,
+        'readAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    await batch.commit();
+  }
+
+  /// Fetch incoming friend requests for the authenticated user.
+  ///
+  /// Assumes the backend exposes an endpoint that returns a list of pending
+  /// friend requests addressed to the current user. Each item should be a
+  /// JSON object containing at least: `id` (request id), `fromUserId`,
+  /// `fromUser` or `author` (author metadata), and `createdAt`.
+  Future<List<Map<String, dynamic>>> getIncomingFriendRequests() async {
+    final result = await _authorizedRequest(
+      _HttpMethod.get,
+      '/friend/requests/received',
+      acceptedStatus: const [200],
+    );
+
+    final data = result.json;
+    if (data is List) {
+      return List<Map<String, dynamic>>.from(
+        data.map((e) => e is Map<String, dynamic> ? e : <String, dynamic>{}),
+      );
+    }
+
+    // If the backend wraps the list in a `data` or `items` field, try to
+    // normalize that here.
+    if (data is Map<String, dynamic>) {
+      final items = data['items'] ?? data['data'] ?? data['requests'];
+      if (items is List) {
+        return List<Map<String, dynamic>>.from(
+          items.map((e) => e is Map<String, dynamic> ? e : <String, dynamic>{}),
+        );
+      }
+    }
+
+    return <Map<String, dynamic>>[];
   }
 
   Future<Map<String, dynamic>> updateProfilePicture(File imageFile) async {
@@ -196,7 +564,9 @@ class ApiService {
     _log('Upload Profile Picture Response Body: ${response.body}');
 
     if (response.statusCode == 200) {
-      return json.decode(response.body) as Map<String, dynamic>;
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      unawaited(_writeCacheEntry(_profileCacheKey(userId), data));
+      return data;
     }
 
     throw Exception(
@@ -211,6 +581,10 @@ class ApiService {
       acceptedStatus: const [200, 204],
       parseJson: false,
     );
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId != null) {
+      unawaited(_invalidateCacheKey(_profileCacheKey(userId)));
+    }
   }
 
   Future<void> deletePost(String postId) async {
@@ -221,6 +595,7 @@ class ApiService {
       parseJson: false,
     );
     _log('The post is deleted (${result.statusCode})');
+    unawaited(_invalidateCacheKey(_postsCacheKey));
   }
 
   Future<Map<String, dynamic>> likePost(String postId) async {
@@ -232,13 +607,16 @@ class ApiService {
 
     final data = result.json;
     if (data is Map<String, dynamic>) {
+      unawaited(_invalidateCacheKey(_postsCacheKey));
       return data;
     }
 
     if (data == null) {
+      unawaited(_invalidateCacheKey(_postsCacheKey));
       return <String, dynamic>{};
     }
 
+    unawaited(_invalidateCacheKey(_postsCacheKey));
     return <String, dynamic>{'raw': data};
   }
 
@@ -251,13 +629,16 @@ class ApiService {
 
     final data = result.json;
     if (data == null) {
+      unawaited(_invalidateCacheKey(_postsCacheKey));
       return <String, dynamic>{};
     }
 
     if (data is Map<String, dynamic>) {
+      unawaited(_invalidateCacheKey(_postsCacheKey));
       return data;
     }
 
+    unawaited(_invalidateCacheKey(_postsCacheKey));
     return <String, dynamic>{'raw': data};
   }
 
@@ -265,10 +646,20 @@ class ApiService {
     String postId, {
     int? limit,
     String? cursor,
+    bool forceRefresh = false,
   }) async {
     final queryParams = <String, String>{};
     if (limit != null) queryParams['limit'] = '$limit';
     if (cursor != null && cursor.isNotEmpty) queryParams['cursor'] = cursor;
+
+    final shouldCache = cursor == null;
+    final cacheKey = _commentsCacheKey(postId);
+    if (shouldCache && !forceRefresh) {
+      final cached = await _readCachedJson(cacheKey);
+      if (cached is Map<String, dynamic>) {
+        return Map<String, dynamic>.from(cached);
+      }
+    }
 
     final result = await _authorizedRequest(
       _HttpMethod.get,
@@ -277,24 +668,29 @@ class ApiService {
     );
 
     final data = result.json;
-    if (data == null) {
-      return <String, dynamic>{'items': <dynamic>[]};
-    }
+    Map<String, dynamic> normalized;
 
-    if (data is List) {
+    if (data == null) {
+      normalized = <String, dynamic>{'items': <dynamic>[], 'total': 0};
+    } else if (data is List) {
       final items = List<dynamic>.from(data);
-      return <String, dynamic>{
+      normalized = <String, dynamic>{
         'items': items,
         'total': items.length,
         'cursor': null,
       };
+    } else if (data is Map<String, dynamic>) {
+      normalized = Map<String, dynamic>.from(data);
+      normalized.putIfAbsent('items', () => <dynamic>[]);
+    } else {
+      normalized = <String, dynamic>{'items': <dynamic>[], 'raw': data};
     }
 
-    if (data is Map<String, dynamic>) {
-      return data;
+    if (shouldCache) {
+      unawaited(_writeCacheEntry(cacheKey, normalized));
     }
 
-    return <String, dynamic>{'items': <dynamic>[], 'raw': data};
+    return normalized;
   }
 
   Future<Map<String, dynamic>> addComment(String postId, String text) async {
@@ -307,23 +703,29 @@ class ApiService {
 
     final data = result.json;
     if (data is Map<String, dynamic>) {
+      unawaited(_invalidateCacheKey(_commentsCacheKey(postId)));
       return data;
     }
 
     if (data == null) {
+      unawaited(_invalidateCacheKey(_commentsCacheKey(postId)));
       return <String, dynamic>{};
     }
 
+    unawaited(_invalidateCacheKey(_commentsCacheKey(postId)));
     return <String, dynamic>{'raw': data};
   }
 
-  Future<void> deleteComment(String commentId) async {
+  Future<void> deleteComment(String commentId, {String? postId}) async {
     await _authorizedRequest(
       _HttpMethod.delete,
       '/comments/$commentId',
       acceptedStatus: const [200, 204],
       parseJson: false,
     );
+    if (postId != null) {
+      unawaited(_invalidateCacheKey(_commentsCacheKey(postId)));
+    }
   }
 
   List<dynamic> sortPostsByNewest(List<dynamic> posts) {
@@ -344,6 +746,282 @@ class ApiService {
       }
     }
     return DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+  }
+
+  Future<dynamic> _readCachedJson(String key) async {
+    try {
+      final fileInfo = await _apiCache.getFileFromCache(key);
+      if (fileInfo == null) return null;
+      if (DateTime.now().isAfter(fileInfo.validTill)) {
+        unawaited(_apiCache.removeFile(key));
+        return null;
+      }
+      final contents = await fileInfo.file.readAsString();
+      return json.decode(contents);
+    } catch (e) {
+      _log('Failed to read cache for "$key": $e');
+      return null;
+    }
+  }
+
+  Future<void> _writeCacheEntry(String key, dynamic value) async {
+    try {
+      final encoded = json.encode(value);
+      final bytes = Uint8List.fromList(utf8.encode(encoded));
+      await _apiCache.putFile(key, bytes, fileExtension: 'json');
+    } catch (e) {
+      _log('Failed to write cache for "$key": $e');
+    }
+  }
+
+  Future<void> _invalidateCacheKey(String key) async {
+    try {
+      await _apiCache.removeFile(key);
+    } catch (e) {
+      _log('Failed to invalidate cache for "$key": $e');
+    }
+  }
+
+  void _cacheRelationshipSummary(String userId, RelationshipSummary summary) {
+    unawaited(
+      _writeCacheEntry(_relationshipSummaryCacheKey(userId), summary.toMap()),
+    );
+  }
+
+  void _applyRelationshipMutations(
+    String targetUserId,
+    RelationshipSummary summary,
+  ) {
+    _cacheRelationshipSummary(targetUserId, summary);
+    unawaited(_invalidateCacheKey(_profileCacheKey(targetUserId)));
+
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUserId != null) {
+      unawaited(
+        _invalidateCacheKey(_relationshipSummaryCacheKey(currentUserId)),
+      );
+      unawaited(_invalidateCacheKey(_profileCacheKey(currentUserId)));
+    }
+  }
+
+  Future<RelationshipSummary?> _tryRefreshRelationshipSummary(
+    String userId,
+  ) async {
+    try {
+      return await getRelationshipSummary(userId, forceRefresh: true);
+    } catch (e, stack) {
+      _log('Failed to refresh relationship summary for $userId: $e');
+      _log(stack.toString());
+      return null;
+    }
+  }
+
+  Future<RelationshipSummary> _resolveRelationshipFromMutation(
+    _ApiResponse response, {
+    required String fallbackUserId,
+    RelationshipStatus? fallbackStatus,
+    String? fallbackPendingRequestId,
+  }) async {
+    final parsed = _parseRelationshipSummary(response.json);
+    if (parsed != null) {
+      var adjusted = parsed;
+      if (fallbackStatus != null &&
+          adjusted.status == RelationshipStatus.none) {
+        adjusted = adjusted.copyWith(status: fallbackStatus);
+      }
+      if (fallbackPendingRequestId != null &&
+          adjusted.pendingRequestId == null) {
+        adjusted = adjusted.copyWith(
+          pendingRequestId: fallbackPendingRequestId,
+        );
+      }
+      return adjusted;
+    }
+
+    final refreshed = await _tryRefreshRelationshipSummary(fallbackUserId);
+    if (refreshed != null) {
+      var adjusted = refreshed;
+      if (fallbackStatus != null &&
+          adjusted.status == RelationshipStatus.none) {
+        adjusted = adjusted.copyWith(status: fallbackStatus);
+      }
+      if (fallbackPendingRequestId != null &&
+          adjusted.pendingRequestId == null) {
+        adjusted = adjusted.copyWith(
+          pendingRequestId: fallbackPendingRequestId,
+        );
+      }
+      return adjusted;
+    }
+
+    return RelationshipSummary(
+      status: fallbackStatus ?? RelationshipStatus.none,
+      pendingRequestId: fallbackPendingRequestId,
+      followerCount: 0,
+      followingCount: 0,
+      friendCount: 0,
+    );
+  }
+
+  static String? _extractTargetUserId(dynamic payload) {
+    final map = _normalizeToMap(payload);
+    if (map == null) return null;
+
+    final direct = map['targetUserId'];
+    if (direct is String && direct.isNotEmpty) {
+      return direct;
+    }
+
+    final summary = map['summary'];
+    if (summary is Map<String, dynamic>) {
+      final nested = summary['targetUserId'];
+      if (nested is String && nested.isNotEmpty) {
+        return nested;
+      }
+    }
+
+    return null;
+  }
+
+  static Map<String, dynamic>? _normalizeToMap(dynamic payload) {
+    if (payload is Map<String, dynamic>) {
+      return payload;
+    }
+    if (payload is Map) {
+      return payload.map((key, value) => MapEntry('$key', value));
+    }
+    if (payload is String && payload.isNotEmpty) {
+      try {
+        final decoded = json.decode(payload);
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  static String? _extractPendingRequestId(dynamic payload) {
+    final map = _normalizeToMap(payload);
+    if (map == null) {
+      return null;
+    }
+
+    final direct =
+        map['pendingRequestId'] ??
+        map['requestId'] ??
+        map['outgoingRequestId'] ??
+        map['incomingRequestId'];
+    if (direct is String && direct.isNotEmpty) {
+      return direct;
+    }
+
+    final request = map['request'];
+    if (request is Map<String, dynamic>) {
+      final pending = request['id'] ?? request['_id'];
+      if (pending is String && pending.isNotEmpty) {
+        return pending;
+      }
+    }
+
+    final data = map['data'];
+    if (data is Map<String, dynamic>) {
+      final nested = data['request'];
+      if (nested is Map<String, dynamic>) {
+        final pending = nested['id'] ?? nested['_id'];
+        if (pending is String && pending.isNotEmpty) {
+          return pending;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  static RelationshipSummary? _parseRelationshipSummary(dynamic payload) {
+    if (payload == null) return null;
+
+    final map = _normalizeToMap(payload);
+    if (map == null) return null;
+
+    Map<String, dynamic> working = map;
+    if (working['summary'] is Map<String, dynamic>) {
+      working = Map<String, dynamic>.from(
+        working['summary'] as Map<String, dynamic>,
+      );
+    } else if (working['data'] is Map<String, dynamic>) {
+      working = Map<String, dynamic>.from(
+        working['data'] as Map<String, dynamic>,
+      );
+    }
+
+    final statusValue =
+        working['status'] ?? working['relationshipStatus'] ?? working['state'];
+    final status = _statusFromValue(statusValue);
+
+    String? pendingId;
+    final rawPending =
+        working['pendingRequestId'] ??
+        working['requestId'] ??
+        working['outgoingRequestId'] ??
+        working['incomingRequestId'];
+    if (rawPending is String && rawPending.isNotEmpty) {
+      pendingId = rawPending;
+    }
+
+    final followerCount =
+        _tryParseInt(
+          working['followerCount'] ??
+              working['followers'] ??
+              working['followersCount'],
+        ) ??
+        0;
+    final followingCount =
+        _tryParseInt(
+          working['followingCount'] ??
+              working['following'] ??
+              working['followingsCount'],
+        ) ??
+        0;
+
+    return RelationshipSummary(
+      status: status,
+      pendingRequestId: pendingId,
+      followerCount: followerCount,
+      followingCount: followingCount,
+      friendCount:
+          _tryParseInt(working['friendCount'] ?? working['friendsCount']) ?? 0,
+    );
+  }
+
+  static int? _tryParseInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
+  }
+
+  static RelationshipStatus _statusFromValue(dynamic value) {
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+      for (final status in RelationshipStatus.values) {
+        final name = status.name.toLowerCase();
+        if (normalized == name) {
+          return status;
+        }
+        final compressedNormalized = normalized.replaceAll(
+          RegExp(r'[_\s-]'),
+          '',
+        );
+        final compressedName = name.replaceAll(RegExp(r'[_\s-]'), '');
+        if (compressedNormalized == compressedName) {
+          return status;
+        }
+      }
+    }
+    return RelationshipStatus.none;
   }
 
   static Future<_ApiResponse> _authorizedRequest(
@@ -433,6 +1111,8 @@ class ApiService {
   }
 }
 
+enum PostMediaType { image, video }
+
 enum _HttpMethod { get, post, put, delete }
 
 class _ApiResponse {
@@ -441,4 +1121,46 @@ class _ApiResponse {
   final int statusCode;
   final String body;
   final dynamic json;
+}
+
+enum RelationshipStatus { none, pendingOutgoing, pendingIncoming, friends }
+
+class RelationshipSummary {
+  const RelationshipSummary({
+    required this.status,
+    required this.pendingRequestId,
+    required this.followerCount,
+    required this.followingCount,
+    required this.friendCount,
+  });
+
+  final RelationshipStatus status;
+  final String? pendingRequestId;
+  final int followerCount;
+  final int followingCount;
+  final int friendCount;
+
+  RelationshipSummary copyWith({
+    RelationshipStatus? status,
+    String? pendingRequestId,
+    int? followerCount,
+    int? followingCount,
+    int? friendCount,
+  }) {
+    return RelationshipSummary(
+      status: status ?? this.status,
+      pendingRequestId: pendingRequestId ?? this.pendingRequestId,
+      followerCount: followerCount ?? this.followerCount,
+      followingCount: followingCount ?? this.followingCount,
+      friendCount: friendCount ?? this.friendCount,
+    );
+  }
+
+  Map<String, dynamic> toMap() => <String, dynamic>{
+    'status': status.name,
+    'pendingRequestId': pendingRequestId,
+    'followerCount': followerCount,
+    'followingCount': followingCount,
+    'friendCount': friendCount,
+  };
 }

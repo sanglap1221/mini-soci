@@ -1,7 +1,9 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
+import '../services/app_cache_managers.dart';
 import '../utils/time_formatter.dart';
 
 class PostViewer {
@@ -68,32 +70,24 @@ class PostViewer {
       );
     }
 
-    return Image.network(
-      imageUrl,
+    return CachedNetworkImage(
+      cacheManager: AppCacheManagers.imageCache,
+      imageUrl: imageUrl,
       fit: BoxFit.contain,
-      errorBuilder: (context, error, stackTrace) {
-        return Container(
-          color: Colors.grey[200],
-          alignment: Alignment.center,
-          child: const Icon(Icons.error_outline, color: Colors.grey),
-        );
-      },
-      loadingBuilder: (context, child, loadingProgress) {
-        if (loadingProgress == null) {
-          return child;
-        }
-        return Container(
-          color: Colors.grey[200],
-          alignment: Alignment.center,
-          child: CircularProgressIndicator(
-            value: loadingProgress.expectedTotalBytes != null
-                ? loadingProgress.cumulativeBytesLoaded /
-                      loadingProgress.expectedTotalBytes!
-                : null,
-            strokeWidth: 2,
-          ),
-        );
-      },
+      placeholder: (context, url) => Container(
+        color: Colors.grey[200],
+        alignment: Alignment.center,
+        child: const SizedBox(
+          width: 32,
+          height: 32,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      ),
+      errorWidget: (context, url, error) => Container(
+        color: Colors.grey[200],
+        alignment: Alignment.center,
+        child: const Icon(Icons.error_outline, color: Colors.grey),
+      ),
     );
   }
 }
@@ -253,7 +247,7 @@ class _PostViewerDialogState extends State<_PostViewerDialog> {
     });
 
     try {
-      await widget.apiService.deleteComment(commentId);
+      await widget.apiService.deleteComment(commentId, postId: widget.postId);
       if (!mounted) return;
       setState(() {
         _comments.removeWhere(

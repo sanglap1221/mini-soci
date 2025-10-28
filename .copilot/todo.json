@@ -1,0 +1,32 @@
+[
+	{
+		"id": 1,
+		"title": "Add notification data access",
+			"status": "done",
+		"details": "Extend ApiService to fetch and update notifications (Firestore collection)"
+	},
+	{
+		"id": 2,
+		"title": "Create notifications page",
+			"status": "done",
+		"details": "Implement new UI screen listing friend request/like/comment notifications with refresh action"
+	},
+	{
+		"id": 3,
+		"title": "Wire navigation and app bar",
+			"status": "done",
+		"details": "Replace feed reload icon with notification button, hook bottom nav to new screen, keep pull-to-refresh"
+	},
+	{
+		"id": 4,
+		"title": "Configure Firestore rules/indexes",
+			"status": "done",
+		"details": "Add notifications collection rules and index definitions"
+	},
+	{
+		"id": 5,
+		"title": "Validate and document",
+			"status": "done",
+		"details": "Format code, run analyzer, and note testing steps"
+	}
+]

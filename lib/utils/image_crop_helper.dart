@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:typed_data';
-
 import 'package:crop_your_image/crop_your_image.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -17,6 +16,40 @@ class ImageCropHelper {
     isCircle: false,
     aspectRatio: null, // Free aspect ratio
   );
+
+  static Future<File?> pickPostVideo(BuildContext context) async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.video_library),
+              title: const Text('Choose from Gallery'),
+              onTap: () => Navigator.pop(context, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.videocam),
+              title: const Text('Record Video'),
+              onTap: () => Navigator.pop(context, ImageSource.camera),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+
+    if (source == null) return null;
+
+    final picker = ImagePicker();
+    final picked = await picker.pickVideo(
+      source: source,
+      maxDuration: const Duration(minutes: 1),
+    );
+    if (picked == null) return null;
+
+    return File(picked.path);
+  }
 
   static Future<File?> pickAndCrop({
     required BuildContext context,

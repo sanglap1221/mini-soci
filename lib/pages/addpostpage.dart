@@ -1,5 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:video_player/video_player.dart';
 import 'package:pay_go/utils/image_crop_helper.dart';
 import '../services/api_service.dart';
 
@@ -12,98 +14,160 @@ class Addpostpage extends StatefulWidget {
 
 class _AddpostpageState extends State<Addpostpage> {
   final _apiService = ApiService();
-  File? _image;
   final _captionController = TextEditingController();
+
+  File? _mediaFile;
+  PostMediaType? _mediaType;
+  VideoPlayerController? _videoController;
+
   bool _isLoading = false;
 
-  Future<void> _pickImage() async {
-    final file = await ImageCropHelper.pickPostImage(context);
-    if (file == null) return;
-    if (!mounted) return;
-    setState(() {
-      _image = file;
-    });
+  @override
+  void dispose() {
+    _captionController.dispose();
+    _videoController?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickMedia() async {
+    final choice = await showModalBottomSheet<PostMediaType>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('Photo'),
+              onTap: () => Navigator.pop(context, PostMediaType.image),
+            ),
+            ListTile(
+              leading: const Icon(Icons.videocam),
+              title: const Text('Video'),
+              onTap: () => Navigator.pop(context, PostMediaType.video),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (!mounted || choice == null) return;
+
+    switch (choice) {
+      case PostMediaType.image:
+        final file = await ImageCropHelper.pickPostImage(context);
+        if (file == null) return;
+        _videoController?.dispose();
+        setState(() {
+          _mediaFile = file;
+          _mediaType = PostMediaType.image;
+          _videoController = null;
+        });
+        break;
+      case PostMediaType.video:
+        final file = await ImageCropHelper.pickPostVideo(context);
+        if (file == null) return;
+
+        final controller = VideoPlayerController.file(file);
+        await controller.initialize();
+
+        _videoController?.dispose();
+        setState(() {
+          _mediaFile = file;
+          _mediaType = PostMediaType.video;
+          _videoController = controller
+            ..setLooping(true)
+            ..play();
+        });
+        break;
+    }
   }
 
   Future<void> _createPost() async {
-    if (_image == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Please select an image')));
+    if (_mediaFile == null || _mediaType == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a photo or video')),
+      );
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-    });
+    setState(() => _isLoading = true);
 
     try {
-      // Create post using API service
-      await _apiService.createPost(_captionController.text.trim(), _image!);
+      await _apiService.createPost(
+        _captionController.text.trim(),
+        _mediaFile!,
+        mediaType: _mediaType!,
+      );
 
-      if (mounted) {
-        Navigator.pop(context, true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Post created successfully'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
+      if (!mounted) return;
+      Navigator.pop(context, true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Post created successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.toString().replaceAll('Exception: ', '')),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ),
+      );
     } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final mediaPreview = () {
+      if (_mediaFile == null || _mediaType == null) {
+        return const Icon(Icons.add_to_photos, size: 50);
+      }
+      if (_mediaType == PostMediaType.image) {
+        return Image.file(_mediaFile!, fit: BoxFit.cover);
+      }
+      if (_videoController == null || !_videoController!.value.isInitialized) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      return AspectRatio(
+        aspectRatio: _videoController!.value.aspectRatio,
+        child: VideoPlayer(_videoController!),
+      );
+    }();
+
     return Scaffold(
       appBar: AppBar(
-        title: Text('Create Post'),
+        title: const Text('Create Post'),
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(top: 6.0),
-            child: IconButton(
-              icon: const Icon(Icons.check),
-              onPressed: _isLoading ? null : _createPost,
-            ),
+          IconButton(
+            icon: const Icon(Icons.check),
+            onPressed: _isLoading ? null : _createPost,
           ),
         ],
       ),
       body: _isLoading
-          ? Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
-              padding: EdgeInsets.all(16),
+              padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
                   GestureDetector(
-                    onTap: _pickImage,
+                    onTap: _pickMedia,
                     child: Container(
-                      height: 200,
+                      height: 220,
                       width: double.infinity,
                       color: Colors.grey[300],
-                      child: _image != null
-                          ? Image.file(_image!, fit: BoxFit.cover)
-                          : Icon(Icons.add_photo_alternate, size: 50),
+                      alignment: Alignment.center,
+                      child: mediaPreview,
                     ),
                   ),
-                  SizedBox(height: 16),
+                  const SizedBox(height: 16),
                   TextField(
                     controller: _captionController,
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       hintText: 'Write a caption...',
                       border: OutlineInputBorder(),
                     ),

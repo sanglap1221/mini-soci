@@ -137,7 +137,7 @@ class _CommentsSheetState extends State<CommentsSheet> {
     });
 
     try {
-      await widget.apiService.deleteComment(commentId);
+      await widget.apiService.deleteComment(commentId, postId: widget.postId);
       if (!mounted) return;
       setState(() {
         _comments.removeWhere(

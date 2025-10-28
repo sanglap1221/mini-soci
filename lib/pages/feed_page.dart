@@ -1,13 +1,19 @@
 import 'dart:async';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:pay_go/models/post_interaction_state.dart';
 import 'package:pay_go/services/api_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:pay_go/services/app_cache_managers.dart';
 import 'package:pay_go/utils/post_viewer.dart';
 import 'package:pay_go/utils/time_formatter.dart';
 import 'package:pay_go/widgets/comments_sheet.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:video_player/video_player.dart';
+import 'notifications_page.dart';
 import 'profile_page.dart';
 
 class FeedPage extends StatefulWidget {
@@ -28,8 +34,8 @@ class _FeedPageState extends State<FeedPage> {
   final Set<String> _failedPostImageUrls = <String>{};
   final Set<String> _failedAuthorAvatarUrls = <String>{};
   final Map<String, String> _usernameOverrides = <String, String>{};
-  final Map<String, _PostInteractionState> _postInteractions =
-      <String, _PostInteractionState>{};
+  final Map<String, PostInteractionState> _postInteractions =
+      <String, PostInteractionState>{};
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _userSubscription;
 
   @override
@@ -55,7 +61,7 @@ class _FeedPageState extends State<FeedPage> {
     }
   }
 
-  Future<void> _loadPosts() async {
+  Future<void> _loadPosts({bool forceRefresh = false}) async {
     try {
       setState(() {
         _isLoading = true;
@@ -63,7 +69,7 @@ class _FeedPageState extends State<FeedPage> {
       });
 
       debugPrint('Loading posts...');
-      final posts = await _apiService.getPosts();
+      final posts = await _apiService.getPosts(forceRefresh: forceRefresh);
 
       if (!mounted) return;
       setState(() {
@@ -194,7 +200,7 @@ class _FeedPageState extends State<FeedPage> {
   // Method to refresh posts - can be called from other pages
   void refreshPosts() {
     debugPrint('refreshPosts called externally');
-    _loadPosts();
+    _loadPosts(forceRefresh: true);
   }
 
   void _navigateToUserProfile(String userId) {
@@ -212,12 +218,74 @@ class _FeedPageState extends State<FeedPage> {
       'FeedPage build method called - isLoading: $_isLoading, postsCount: ${_posts?.length}',
     );
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Feed'),
-        actions: [IconButton(icon: Icon(Icons.refresh), onPressed: _loadPosts)],
+      appBar: AppBar(title: Text('Feed'), actions: _buildAppBarActions()),
+      body: RefreshIndicator(
+        onRefresh: () => _loadPosts(forceRefresh: true),
+        child: _buildBody(),
       ),
-      body: RefreshIndicator(onRefresh: _loadPosts, child: _buildBody()),
     );
+  }
+
+  List<Widget> _buildAppBarActions() {
+    if (currentUserId == null) {
+      return [];
+    }
+
+    final stream = FirebaseFirestore.instance
+        .collection('notifications')
+        .where('toUserId', isEqualTo: currentUserId)
+        .where('isRead', isEqualTo: false)
+        .snapshots();
+
+    return [
+      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: stream,
+        builder: (context, snapshot) {
+          final unreadCount = snapshot.hasData ? snapshot.data!.size : 0;
+          return IconButton(
+            tooltip: 'Notifications',
+            onPressed: _openNotifications,
+            icon: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                const Icon(Icons.notifications_outlined),
+                if (unreadCount > 0)
+                  Positioned(
+                    right: -2,
+                    top: -2,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.error,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      constraints: const BoxConstraints(minWidth: 18),
+                      child: Text(
+                        unreadCount > 9 ? '9+' : '$unreadCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    ];
+  }
+
+  Future<void> _openNotifications() async {
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (context) => const NotificationsPage()));
   }
 
   Widget _buildBody() {
@@ -365,7 +433,7 @@ class _FeedPageState extends State<FeedPage> {
                 ),
               ),
               // Post image
-              _buildPostImage(context, post),
+              _buildPostMedia(context, post),
               // Post caption
               Padding(
                 padding: EdgeInsets.all(8),
@@ -394,12 +462,24 @@ class _FeedPageState extends State<FeedPage> {
     }
 
     return ClipOval(
-      child: Image.network(
-        avatarUrl,
+      child: CachedNetworkImage(
+        cacheManager: AppCacheManagers.imageCache,
+        imageUrl: avatarUrl,
         width: 32,
         height: 32,
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) {
+        placeholder: (context, url) => SizedBox(
+          width: 32,
+          height: 32,
+          child: const Center(
+            child: SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        ),
+        errorWidget: (context, url, error) {
           _failedAuthorAvatarUrls.add(avatarUrl);
           debugPrint('Author avatar load error for $avatarUrl: $error');
           return _buildAuthorInitial(username);
@@ -439,7 +519,40 @@ class _FeedPageState extends State<FeedPage> {
     return 'Unknown User';
   }
 
-  Widget _buildPostImage(BuildContext context, Map<String, dynamic> post) {
+  Widget _buildPostMedia(BuildContext context, Map<String, dynamic> post) {
+    final mediaType = (post['mediaType'] as String?)?.toLowerCase().trim();
+    final videoPath = post['videoUrl'] as String?;
+
+    if (mediaType == 'video' && videoPath != null && videoPath.isNotEmpty) {
+      return _buildPostVideo(context, post, videoPath);
+    }
+
+    return _buildPostImageContent(context, post);
+  }
+
+  Widget _buildPostVideo(
+    BuildContext context,
+    Map<String, dynamic> post,
+    String videoPath,
+  ) {
+    final videoUrl = _apiService.getFullImageUrl(videoPath);
+    final thumbnailPath = (post['thumbnailUrl'] as String?) ?? '';
+    final thumbnailUrl = thumbnailPath.isNotEmpty
+        ? _apiService.getFullImageUrl(thumbnailPath)
+        : null;
+
+    return FeedVideoPlayer(
+      key: ValueKey(videoUrl),
+      videoUrl: videoUrl,
+      thumbnailUrl: thumbnailUrl,
+      height: 200,
+    );
+  }
+
+  Widget _buildPostImageContent(
+    BuildContext context,
+    Map<String, dynamic> post,
+  ) {
     final rawPath = (post['imageUrl'] as String?) ?? '';
     if (rawPath.isEmpty) {
       return _buildImagePlaceholder();
@@ -462,26 +575,21 @@ class _FeedPageState extends State<FeedPage> {
     final commentCount = interactionState.commentCount;
     final isLiked = interactionState.isLiked;
 
-    final imageWidget = Image.network(
-      imageUrl,
+    final imageWidget = CachedNetworkImage(
+      cacheManager: AppCacheManagers.imageCache,
+      imageUrl: imageUrl,
       fit: BoxFit.cover,
       width: double.infinity,
       height: 200,
-      loadingBuilder: (context, child, loadingProgress) {
-        if (loadingProgress == null) return child;
+      progressIndicatorBuilder: (context, url, downloadProgress) {
         return SizedBox(
           height: 200,
           child: Center(
-            child: CircularProgressIndicator(
-              value: loadingProgress.expectedTotalBytes != null
-                  ? loadingProgress.cumulativeBytesLoaded /
-                        loadingProgress.expectedTotalBytes!
-                  : null,
-            ),
+            child: CircularProgressIndicator(value: downloadProgress.progress),
           ),
         );
       },
-      errorBuilder: (context, error, stackTrace) {
+      errorWidget: (context, url, error) {
         _failedPostImageUrls.add(imageUrl);
         debugPrint('Post image load error for $imageUrl: $error');
         return _buildImagePlaceholder();
@@ -593,6 +701,13 @@ class _FeedPageState extends State<FeedPage> {
                   }
                 : null,
           ),
+          const SizedBox(width: 12),
+          _buildFooterAction(
+            icon: Icons.share_outlined,
+            color: Colors.grey[700],
+            label: 'Share',
+            onTap: () => _sharePost(post),
+          ),
           const Spacer(),
           if (interaction?.isLikeLoading ?? false)
             const SizedBox(
@@ -626,6 +741,57 @@ class _FeedPageState extends State<FeedPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _sharePost(Map<String, dynamic> post) async {
+    final caption = post['caption']?.toString().trim() ?? '';
+    final rawPath = (post['imageUrl'] as String?) ?? '';
+    final resolvedImageUrl = rawPath.isNotEmpty
+        ? _apiService.getFullImageUrl(rawPath)
+        : null;
+    final postId = _extractPostId(post);
+
+    final buffer = StringBuffer();
+    var hasContent = false;
+
+    if (caption.isNotEmpty) {
+      buffer.writeln(caption);
+      hasContent = true;
+    }
+    if (resolvedImageUrl != null && resolvedImageUrl.isNotEmpty) {
+      if (hasContent) buffer.writeln();
+      buffer.writeln(resolvedImageUrl);
+      hasContent = true;
+    }
+    if (postId != null) {
+      if (hasContent) buffer.writeln();
+      buffer.writeln('Shared via Pay Go (Post ID: $postId)');
+      hasContent = true;
+    } else if (!hasContent) {
+      buffer.write('Check out this post on Pay Go!');
+      hasContent = true;
+    }
+
+    final shareContent = buffer.toString().trim();
+    if (shareContent.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nothing to share for this post')),
+      );
+      return;
+    }
+
+    try {
+      await Share.share(shareContent);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to share post: $error'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Future<void> _toggleLike(Map<String, dynamic> post) async {
@@ -744,7 +910,7 @@ class _FeedPageState extends State<FeedPage> {
   }
 
   void _syncPostInteractions(List<dynamic> posts) {
-    final next = <String, _PostInteractionState>{};
+    final next = <String, PostInteractionState>{};
     for (final item in posts) {
       if (item is! Map<String, dynamic>) continue;
       final postId = _extractPostId(item);
@@ -763,7 +929,7 @@ class _FeedPageState extends State<FeedPage> {
             isLiked: isLiked,
             isLikeLoading: false,
           ) ??
-          _PostInteractionState(
+          PostInteractionState(
             likeCount: likeCount,
             commentCount: commentCount,
             isLiked: isLiked,
@@ -822,8 +988,8 @@ class _FeedPageState extends State<FeedPage> {
     return null;
   }
 
-  _PostInteractionState _createStateFromPost(Map<String, dynamic> post) {
-    return _PostInteractionState(
+  PostInteractionState _createStateFromPost(Map<String, dynamic> post) {
+    return PostInteractionState(
       likeCount: _readLikeCount(post) ?? 0,
       commentCount: _readCommentCount(post) ?? 0,
       isLiked: _readIsLiked(post) ?? false,
@@ -956,30 +1122,257 @@ class _FeedPageState extends State<FeedPage> {
   int _clampNonNegative(int value) => value < 0 ? 0 : value;
 }
 
-class _PostInteractionState {
-  const _PostInteractionState({
-    required this.likeCount,
-    required this.commentCount,
-    required this.isLiked,
-    this.isLikeLoading = false,
+class FeedVideoPlayer extends StatefulWidget {
+  const FeedVideoPlayer({
+    super.key,
+    required this.videoUrl,
+    this.thumbnailUrl,
+    this.height,
+    this.autoplay = false,
+    this.enableFullscreen = true,
+    this.borderRadius = 0,
   });
 
-  final int likeCount;
-  final int commentCount;
-  final bool isLiked;
-  final bool isLikeLoading;
+  final String videoUrl;
+  final String? thumbnailUrl;
+  final double? height;
+  final bool autoplay;
+  final bool enableFullscreen;
+  final double borderRadius;
 
-  _PostInteractionState copyWith({
-    int? likeCount,
-    int? commentCount,
-    bool? isLiked,
-    bool? isLikeLoading,
-  }) {
-    return _PostInteractionState(
-      likeCount: likeCount ?? this.likeCount,
-      commentCount: commentCount ?? this.commentCount,
-      isLiked: isLiked ?? this.isLiked,
-      isLikeLoading: isLikeLoading ?? this.isLikeLoading,
+  @override
+  State<FeedVideoPlayer> createState() => _FeedVideoPlayerState();
+}
+
+class _FeedVideoPlayerState extends State<FeedVideoPlayer> {
+  late final VideoPlayerController _controller;
+  bool _isInitialized = false;
+  bool _initializationFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
+    _controller.setLooping(true);
+    _controller
+        .initialize()
+        .then((_) {
+          if (!mounted) return;
+          setState(() {
+            _isInitialized = true;
+          });
+          if (widget.autoplay) {
+            unawaited(_controller.play());
+          }
+        })
+        .catchError((error, stackTrace) {
+          debugPrint(
+            'FeedVideoPlayer: failed to load ${widget.videoUrl}: $error',
+          );
+          if (!mounted) return;
+          setState(() {
+            _initializationFailed = true;
+          });
+        });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_controller.pause());
+    _controller.dispose();
+    super.dispose();
+  }
+
+  bool get _isPlaying => _isInitialized && _controller.value.isPlaying;
+
+  void _togglePlay() {
+    if (_initializationFailed || !_isInitialized) {
+      return;
+    }
+
+    if (_controller.value.isPlaying) {
+      unawaited(_controller.pause());
+    } else {
+      unawaited(_controller.play());
+    }
+
+    setState(() {});
+  }
+
+  Future<void> _openFullscreen() async {
+    final wasPlaying = _isPlaying;
+    if (wasPlaying) {
+      await _controller.pause();
+      setState(() {});
+    }
+
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (context) => _FullscreenVideoPage(
+          videoUrl: widget.videoUrl,
+          thumbnailUrl: widget.thumbnailUrl,
+        ),
+        fullscreenDialog: true,
+      ),
+    );
+
+    if (wasPlaying && mounted) {
+      unawaited(_controller.play());
+      setState(() {});
+    }
+  }
+
+  Widget _buildVideoLayer() {
+    if (_initializationFailed) {
+      return Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        child: const Icon(
+          Icons.error_outline,
+          color: Colors.redAccent,
+          size: 40,
+        ),
+      );
+    }
+
+    if (_isInitialized) {
+      final size = _controller.value.size;
+      return FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: size.width == 0 ? 1 : size.width,
+          height: size.height == 0 ? 1 : size.height,
+          child: VideoPlayer(_controller),
+        ),
+      );
+    }
+
+    if (widget.thumbnailUrl != null && widget.thumbnailUrl!.isNotEmpty) {
+      return CachedNetworkImage(
+        imageUrl: widget.thumbnailUrl!,
+        fit: BoxFit.cover,
+        placeholder: (context, url) => Container(color: Colors.black12),
+        errorWidget: (context, url, error) => Container(
+          color: Colors.black45,
+          alignment: Alignment.center,
+          child: const Icon(Icons.movie, color: Colors.white54, size: 32),
+        ),
+      );
+    }
+
+    return Container(
+      color: Colors.black,
+      alignment: Alignment.center,
+      child: const Icon(Icons.movie, color: Colors.white54, size: 32),
+    );
+  }
+
+  Widget _wrapWithSizing(Widget child) {
+    final clippedChild = ClipRRect(
+      borderRadius: BorderRadius.circular(widget.borderRadius),
+      child: child,
+    );
+
+    if (widget.height != null) {
+      return SizedBox(
+        height: widget.height,
+        width: double.infinity,
+        child: clippedChild,
+      );
+    }
+
+    final aspectRatio = _isInitialized && _controller.value.aspectRatio > 0
+        ? _controller.value.aspectRatio
+        : 9 / 16;
+
+    return AspectRatio(aspectRatio: aspectRatio, child: clippedChild);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final media = Stack(
+      fit: StackFit.expand,
+      children: [
+        _buildVideoLayer(),
+        if (!_isInitialized && !_initializationFailed)
+          const Center(child: CircularProgressIndicator()),
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _togglePlay,
+          ),
+        ),
+        if (!_initializationFailed)
+          Center(
+            child: AnimatedOpacity(
+              opacity: _isPlaying ? 0 : 1,
+              duration: const Duration(milliseconds: 150),
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: Colors.black45,
+                  shape: BoxShape.circle,
+                ),
+                padding: const EdgeInsets.all(12),
+                child: Icon(
+                  _isPlaying ? Icons.pause : Icons.play_arrow,
+                  color: Colors.white,
+                  size: 32,
+                ),
+              ),
+            ),
+          ),
+        if (widget.enableFullscreen && !_initializationFailed)
+          Positioned(
+            right: 12,
+            bottom: 12,
+            child: GestureDetector(
+              onTap: _openFullscreen,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                padding: const EdgeInsets.all(6),
+                child: const Icon(
+                  Icons.fullscreen,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+
+    return _wrapWithSizing(media);
+  }
+}
+
+class _FullscreenVideoPage extends StatelessWidget {
+  const _FullscreenVideoPage({required this.videoUrl, this.thumbnailUrl});
+
+  final String videoUrl;
+  final String? thumbnailUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colors.white,
+      ),
+      body: Center(
+        child: FeedVideoPlayer(
+          videoUrl: videoUrl,
+          thumbnailUrl: thumbnailUrl,
+          height: null,
+          autoplay: true,
+          enableFullscreen: false,
+          borderRadius: 0,
+        ),
+      ),
     );
   }
 }

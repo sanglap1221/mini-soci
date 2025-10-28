@@ -1,7 +1,9 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:pay_go/services/api_service.dart';
+import '../services/app_cache_managers.dart';
 
 class ChatScreen extends StatefulWidget {
   final String chatId;
@@ -77,15 +79,22 @@ class _ChatScreenState extends State<ChatScreen> {
             if (!snapshot.hasData) {
               return const Text('Unknown User');
             }
-            final userData = snapshot.data?.data() as Map<String, dynamic>? ?? {};
-            final displayName = userData['username'] as String? ?? 'Unknown User';
+            final userData =
+                snapshot.data?.data() as Map<String, dynamic>? ?? {};
+            final displayName =
+                userData['username'] as String? ?? 'Unknown User';
             final avatarUrl = _toFullImageUrl(_extractAvatarPath(userData));
 
             return Row(
               children: [
                 CircleAvatar(
                   radius: 20,
-                  backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
+                  backgroundImage: avatarUrl != null
+                      ? CachedNetworkImageProvider(
+                          avatarUrl,
+                          cacheManager: AppCacheManagers.imageCache,
+                        )
+                      : null,
                   child: avatarUrl == null
                       ? const Icon(Icons.person, size: 20)
                       : null,
@@ -168,12 +177,17 @@ class _ChatScreenState extends State<ChatScreen> {
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(25),
                       ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                IconButton(icon: const Icon(Icons.send), onPressed: _sendMessage),
+                IconButton(
+                  icon: const Icon(Icons.send),
+                  onPressed: _sendMessage,
+                ),
               ],
             ),
           ),
@@ -191,7 +205,8 @@ class _ChatScreenState extends State<ChatScreen> {
     Map<String, dynamic> userData, {
     bool checkNested = true,
   }) {
-    dynamic raw = userData['profilePicUrl'] ??
+    dynamic raw =
+        userData['profilePicUrl'] ??
         userData['profilePicture'] ??
         userData['photoUrl'] ??
         userData['avatar'];
@@ -225,17 +240,18 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     if (raw is Map) {
-      final dynamic candidate = [
-        raw['secureUrl'],
-        raw['secure_url'],
-        raw['url'],
-        raw['path'],
-        raw['downloadUrl'],
-        raw['downloadURL'],
-      ].firstWhere(
-        (value) => value is String && value.trim().isNotEmpty,
-        orElse: () => null,
-      );
+      final dynamic candidate =
+          [
+            raw['secureUrl'],
+            raw['secure_url'],
+            raw['url'],
+            raw['path'],
+            raw['downloadUrl'],
+            raw['downloadURL'],
+          ].firstWhere(
+            (value) => value is String && value.trim().isNotEmpty,
+            orElse: () => null,
+          );
 
       if (candidate is String) {
         return candidate.trim();

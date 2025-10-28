@@ -1,8 +1,10 @@
 import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/api_service.dart';
+import '../services/app_cache_managers.dart';
 import '../utils/image_crop_helper.dart';
 import '../utils/post_viewer.dart';
 import '../utils/time_formatter.dart';
@@ -27,6 +29,9 @@ class _ProfilePageState extends State<ProfilePage> {
   File? _localProfileImage;
   Map<String, dynamic>? _userData;
   Future<List<dynamic>>? _userPostsFuture;
+  bool _isRelationshipActionInFlight = false;
+  RelationshipStatus _relationshipStatus = RelationshipStatus.none;
+  String? _pendingRequestId;
 
   bool get _hasProfileImage =>
       _localProfileImage != null ||
@@ -36,6 +41,13 @@ class _ProfilePageState extends State<ProfilePage> {
       (_userData?['profilePicUrl'] as String?)?.isNotEmpty == true
       ? _userData!['profilePicUrl'] as String
       : null;
+
+  int get _followerCount => (_userData?['followerCount'] as num?)?.toInt() ?? 0;
+
+  int get _followingCount =>
+      (_userData?['followingCount'] as num?)?.toInt() ?? 0;
+
+  int get _friendCount => (_userData?['friendCount'] as num?)?.toInt() ?? 0;
 
   @override
   void initState() {
@@ -51,11 +63,22 @@ class _ProfilePageState extends State<ProfilePage> {
   Future<void> _loadProfile() async {
     if (!mounted) return;
     try {
-      final data = await _apiService.getProfile(profileUserId);
-      debugPrint('Profile data loaded: $data');
+      final profile = await _apiService.getProfile(
+        profileUserId,
+        forceRefresh: true,
+      );
+
+      debugPrint('Profile data loaded: $profile');
+      final summary = await _refreshRelationshipSummary();
       if (!mounted) return;
       setState(() {
-        _userData = data;
+        _userData = {
+          ...profile,
+          'followerCount': summary.followerCount,
+          'followingCount': summary.followingCount,
+          'friendCount': summary.friendCount,
+        };
+        _setRelationshipSummaryState(summary);
       });
       _refreshUserPosts();
     } catch (e) {
@@ -71,6 +94,39 @@ class _ProfilePageState extends State<ProfilePage> {
     setState(() {
       _userPostsFuture = _apiService.getUserPosts(profileUserId);
     });
+  }
+
+  Future<RelationshipSummary> _refreshRelationshipSummary() async {
+    try {
+      var summary = await _apiService.getRelationshipSummary(
+        profileUserId,
+        forceRefresh: true,
+      );
+      if (summary.status == RelationshipStatus.pendingIncoming &&
+          summary.pendingRequestId == null) {
+        try {
+          final incoming = await _apiService.getIncomingFriendRequests();
+          final pendingId = _findMatchingRequestId(incoming);
+          if (pendingId != null) {
+            summary = summary.copyWith(pendingRequestId: pendingId);
+          }
+        } catch (e, stack) {
+          debugPrint('Failed to load incoming requests: $e');
+          debugPrint('$stack');
+        }
+      }
+      return summary;
+    } catch (e, stack) {
+      debugPrint('Failed to refresh relationship summary: $e');
+      debugPrint('$stack');
+      return RelationshipSummary(
+        status: RelationshipStatus.none,
+        pendingRequestId: null,
+        followerCount: _asInt(_userData?['followerCount']) ?? 0,
+        followingCount: _asInt(_userData?['followingCount']) ?? 0,
+        friendCount: _asInt(_userData?['friendCount']) ?? 0,
+      );
+    }
   }
 
   Future<void> _editBio(BuildContext context, String currentBio) async {
@@ -149,14 +205,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 );
 
                 final currentUser = FirebaseAuth.instance.currentUser;
-                try {
-                  await FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(profileUserId)
-                      .set({'username': newUsername}, SetOptions(merge: true));
-                } catch (e) {
-                  debugPrint('Failed to sync username to Firestore: $e');
-                }
+                await _syncUserDocument({'username': newUsername});
 
                 if (currentUser != null) {
                   try {
@@ -277,10 +326,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
     final result = await _apiService.updateProfilePicture(file);
 
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(profileUserId)
-        .update({'profilePicUrl': result['profilePicUrl']});
+    await _syncUserDocument({'profilePicUrl': result['profilePicUrl']});
 
     if (!mounted) return;
     setState(() {
@@ -293,6 +339,33 @@ class _ProfilePageState extends State<ProfilePage> {
         backgroundColor: Colors.green,
       ),
     );
+  }
+
+  Future<void> _syncUserDocument(Map<String, dynamic> data) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(profileUserId)
+          .set(data, SetOptions(merge: true));
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') {
+        debugPrint('Firestore sync skipped: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Profile saved, but Firestore permissions blocked the sync.',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      } else {
+        debugPrint('Unexpected Firestore error: $e');
+      }
+    } catch (e) {
+      debugPrint('Failed to sync user document: $e');
+    }
   }
 
   Widget _buildProfilePicture(Map<String, dynamic>? userData) {
@@ -314,23 +387,35 @@ class _ProfilePageState extends State<ProfilePage> {
                   )
                 : _remoteProfileImageUrl != null
                 ? ClipOval(
-                    child: Image.network(
-                      _apiService.getFullImageUrl(_remoteProfileImageUrl!),
+                    child: CachedNetworkImage(
+                      cacheManager: AppCacheManagers.imageCache,
+                      imageUrl: _apiService.getFullImageUrl(
+                        _remoteProfileImageUrl!,
+                      ),
                       width: 100,
                       height: 100,
                       fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) {
-                        return Container(
-                          width: 100,
-                          height: 100,
-                          color: Colors.grey[300],
-                          child: Icon(
-                            Icons.person,
-                            size: 40,
-                            color: Colors.grey[600],
-                          ),
-                        );
-                      },
+                      placeholder: (context, url) => Container(
+                        width: 100,
+                        height: 100,
+                        alignment: Alignment.center,
+                        color: Colors.grey[300],
+                        child: const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                      errorWidget: (context, url, error) => Container(
+                        width: 100,
+                        height: 100,
+                        color: Colors.grey[300],
+                        child: Icon(
+                          Icons.person,
+                          size: 40,
+                          color: Colors.grey[600],
+                        ),
+                      ),
                     ),
                   )
                 : Text(
@@ -424,27 +509,519 @@ class _ProfilePageState extends State<ProfilePage> {
                 style: TextStyle(color: Colors.grey[600]),
               ),
             ),
-          if (!isCurrentUserProfile)
+          _buildFriendCountRow(),
+          if (!isCurrentUserProfile) ...[
+            if (_relationshipStatus == RelationshipStatus.pendingIncoming)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                child: _buildPendingRequestBanner(),
+              ),
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 16.0),
-              child: ElevatedButton.icon(
-                onPressed: _startChat,
-                icon: const Icon(Icons.message_outlined),
-                label: const Text('Message'),
-                style: ElevatedButton.styleFrom(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 12,
-                  ),
-                ),
-              ),
+              child: _buildActionSection(),
             ),
+          ],
         ],
       ),
     );
+  }
+
+  // ignore: unused_element
+  Widget _buildFollowStatsRow() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _buildFollowMetric(_followerCount, 'Followers'),
+          const SizedBox(width: 32),
+          _buildFollowMetric(_followingCount, 'Following'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFriendCountRow() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            _formatCount(_friendCount),
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Text('Friends', style: TextStyle(color: Colors.grey[600])),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFollowMetric(int count, String label) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          _formatCount(count),
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 4),
+        Text(label, style: TextStyle(color: Colors.grey[600])),
+      ],
+    );
+  }
+
+  Widget _buildActionSection() {
+    if (_relationshipStatus == RelationshipStatus.pendingIncoming) {
+      return Row(children: [Expanded(child: _buildMessageButton())]);
+    }
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Expanded(child: _buildRelationshipButton()),
+        const SizedBox(width: 12),
+        Expanded(child: _buildMessageButton()),
+      ],
+    );
+  }
+
+  Widget _buildPendingRequestBanner() {
+    final username = _userData?['username'] as String? ?? 'This user';
+    final avatarPath = _remoteProfileImageUrl;
+    final accent = Theme.of(context).colorScheme.primary;
+    final hasRequestId = _pendingRequestId != null;
+
+    Widget buildAvatar() {
+      if (avatarPath != null && avatarPath.isNotEmpty) {
+        return CircleAvatar(
+          radius: 24,
+          backgroundImage: CachedNetworkImageProvider(
+            _apiService.getFullImageUrl(avatarPath),
+          ),
+        );
+      }
+      return CircleAvatar(
+        radius: 24,
+        backgroundColor: accent.withValues(alpha: 0.1),
+        child: Text(
+          username.isNotEmpty ? username[0].toUpperCase() : '?',
+          style: TextStyle(color: accent, fontWeight: FontWeight.bold),
+        ),
+      );
+    }
+
+    return Card(
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                buildAvatar(),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$username sent you a friend request',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Respond to connect and start chatting.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _isRelationshipActionInFlight
+                        ? null
+                        : hasRequestId
+                        ? _declinePendingRequest
+                        : null,
+                    child: const Text('Decline'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _isRelationshipActionInFlight
+                        ? null
+                        : hasRequestId
+                        ? _acceptPendingRequest
+                        : null,
+                    child: const Text('Accept'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRelationshipButton() {
+    const height = 40.0;
+    switch (_relationshipStatus) {
+      case RelationshipStatus.none:
+        return SizedBox(
+          height: height,
+          child: ElevatedButton(
+            onPressed: _isRelationshipActionInFlight
+                ? null
+                : _sendFriendRequest,
+            style: ElevatedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+            ),
+            child: const Text('Add Friend'),
+          ),
+        );
+      case RelationshipStatus.pendingOutgoing:
+        return SizedBox(
+          height: height,
+          child: OutlinedButton.icon(
+            onPressed:
+                _isRelationshipActionInFlight || _pendingRequestId == null
+                ? null
+                : _cancelPendingRequest,
+            style: OutlinedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+            ),
+            icon: const Icon(Icons.hourglass_bottom, size: 18),
+            label: const Text('Cancel Request'),
+          ),
+        );
+      case RelationshipStatus.pendingIncoming:
+        return const SizedBox.shrink();
+      case RelationshipStatus.friends:
+        return SizedBox(
+          height: height,
+          child: OutlinedButton.icon(
+            onPressed: _isRelationshipActionInFlight ? null : _confirmUnfriend,
+            style: OutlinedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+            ),
+            icon: const Icon(Icons.check, size: 18),
+            label: const Text('Friends'),
+          ),
+        );
+    }
+  }
+
+  Future<void> _confirmUnfriend() async {
+    if (_isRelationshipActionInFlight) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove Friend?'),
+        content: const Text(
+          'You will no longer follow each other or be able to chat. Do you want to continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Unfriend'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await _unfriend();
+    }
+  }
+
+  Widget _buildMessageButton() {
+    return SizedBox(
+      height: 40,
+      child: OutlinedButton.icon(
+        onPressed: _startChat,
+        icon: const Icon(Icons.message_outlined, size: 18),
+        label: const Text('Message'),
+        style: OutlinedButton.styleFrom(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _setRelationshipSummaryState(RelationshipSummary summary) {
+    _relationshipStatus = isCurrentUserProfile
+        ? RelationshipStatus.friends
+        : summary.status;
+    _pendingRequestId = summary.pendingRequestId;
+    if (_userData != null) {
+      _userData = {
+        ..._userData!,
+        'followerCount': summary.followerCount,
+        'followingCount': summary.followingCount,
+        'friendCount': summary.friendCount,
+      };
+    }
+  }
+
+  void _applyRelationshipSummary(RelationshipSummary summary) {
+    if (!mounted) return;
+    setState(() {
+      _setRelationshipSummaryState(summary);
+    });
+  }
+
+  String? _findMatchingRequestId(List<Map<String, dynamic>> requests) {
+    String? readString(Map<String, dynamic> source, String key) {
+      final value = source[key];
+      if (value is String && value.isNotEmpty) {
+        return value;
+      }
+      return null;
+    }
+
+    String? readNested(Map<String, dynamic> source, List<String> path) {
+      dynamic current = source;
+      for (final segment in path) {
+        if (current is Map<String, dynamic> && current.containsKey(segment)) {
+          current = current[segment];
+        } else {
+          return null;
+        }
+      }
+      return current is String && current.isNotEmpty ? current : null;
+    }
+
+    for (final request in requests) {
+      final fromId =
+          readString(request, 'fromUserId') ??
+          readNested(request, ['fromUser', 'id']) ??
+          readNested(request, ['fromUser', '_id']);
+      final toId = readString(request, 'toUserId');
+
+      if (fromId == profileUserId || toId == profileUserId) {
+        return readString(request, 'id') ??
+            readString(request, '_id') ??
+            readString(request, 'requestId');
+      }
+    }
+    return null;
+  }
+
+  void _showRelationshipError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
+    );
+  }
+
+  void _showRelationshipInfo(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _sendFriendRequest() async {
+    if (_isRelationshipActionInFlight) return;
+    setState(() {
+      _isRelationshipActionInFlight = true;
+    });
+    try {
+      RelationshipSummary summary = await _apiService.sendFriendRequest(
+        profileUserId,
+      );
+      if (summary.pendingRequestId == null) {
+        try {
+          final refreshed = await _apiService.getRelationshipSummary(
+            profileUserId,
+            forceRefresh: true,
+          );
+          if (refreshed.pendingRequestId != null) {
+            summary = refreshed;
+          }
+        } catch (refreshError, stack) {
+          debugPrint('ProfilePage: refresh after send failed: $refreshError');
+          debugPrint('$stack');
+        }
+      }
+
+      _applyRelationshipSummary(summary);
+
+      switch (summary.status) {
+        case RelationshipStatus.pendingOutgoing:
+          _showRelationshipInfo('Friend request sent.');
+          break;
+        case RelationshipStatus.pendingIncoming:
+          _showRelationshipInfo('Respond to the pending friend request.');
+          break;
+        default:
+          break;
+      }
+    } catch (e) {
+      _showRelationshipError('Failed to send friend request: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRelationshipActionInFlight = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _cancelPendingRequest() async {
+    final requestId = _pendingRequestId;
+    if (requestId == null || _isRelationshipActionInFlight) return;
+    final previousStatus = _relationshipStatus;
+    final previousPendingId = _pendingRequestId;
+    debugPrint(
+      'ProfilePage: cancelling request $requestId while status=$previousStatus',
+    );
+    setState(() {
+      _isRelationshipActionInFlight = true;
+      _relationshipStatus = RelationshipStatus.none;
+      _pendingRequestId = null;
+    });
+    try {
+      final summary = previousStatus == RelationshipStatus.pendingIncoming
+          ? await _apiService.declineFriendRequest(
+              requestId,
+              targetUserId: profileUserId,
+            )
+          : await _apiService.cancelFriendRequest(
+              requestId,
+              targetUserId: profileUserId,
+            );
+      debugPrint(
+        'ProfilePage: cancel response status=${summary.status} pending=${summary.pendingRequestId}',
+      );
+      final clearedSummary = RelationshipSummary(
+        status: RelationshipStatus.none,
+        pendingRequestId: null,
+        followerCount: summary.followerCount,
+        followingCount: summary.followingCount,
+        friendCount: summary.friendCount,
+      );
+      _applyRelationshipSummary(clearedSummary);
+      if (previousStatus == RelationshipStatus.pendingIncoming) {
+        _showRelationshipInfo('Friend request declined.');
+      } else {
+        _showRelationshipInfo('Friend request canceled.');
+      }
+    } catch (e) {
+      setState(() {
+        _relationshipStatus = previousStatus;
+        _pendingRequestId = previousPendingId;
+      });
+      _showRelationshipError('Failed to cancel request: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRelationshipActionInFlight = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _acceptPendingRequest() async {
+    final requestId = _pendingRequestId;
+    if (requestId == null || _isRelationshipActionInFlight) return;
+    setState(() {
+      _isRelationshipActionInFlight = true;
+    });
+    try {
+      final summary = await _apiService.acceptFriendRequest(
+        requestId,
+        targetUserId: profileUserId,
+      );
+      _applyRelationshipSummary(summary);
+      _showRelationshipInfo('Friend request accepted.');
+    } catch (e) {
+      _showRelationshipError('Failed to accept request: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRelationshipActionInFlight = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _declinePendingRequest() async {
+    final requestId = _pendingRequestId;
+    if (requestId == null || _isRelationshipActionInFlight) return;
+    setState(() {
+      _isRelationshipActionInFlight = true;
+    });
+    try {
+      final summary = await _apiService.declineFriendRequest(
+        requestId,
+        targetUserId: profileUserId,
+      );
+      _applyRelationshipSummary(summary);
+      _showRelationshipInfo('Friend request declined.');
+    } catch (e) {
+      _showRelationshipError('Failed to decline request: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRelationshipActionInFlight = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _unfriend() async {
+    if (_isRelationshipActionInFlight) return;
+    setState(() {
+      _isRelationshipActionInFlight = true;
+    });
+    try {
+      final summary = await _apiService.unfriend(profileUserId);
+      _applyRelationshipSummary(summary);
+    } catch (e) {
+      _showRelationshipError('Failed to remove friend: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRelationshipActionInFlight = false;
+        });
+      }
+    }
+  }
+
+  String _formatCount(int count) {
+    if (count >= 1000000) {
+      final value = count / 1000000;
+      return value >= 10 ? '${value.floor()}M' : '${value.toStringAsFixed(1)}M';
+    }
+    if (count >= 1000) {
+      final value = count / 1000;
+      return value >= 10 ? '${value.floor()}K' : '${value.toStringAsFixed(1)}K';
+    }
+    return count.toString();
   }
 
   Widget _buildPostsSection() {
@@ -605,30 +1182,23 @@ class _ProfilePageState extends State<ProfilePage> {
       );
     }
 
-    return Image.network(
-      resolvedUrl,
+    return CachedNetworkImage(
+      cacheManager: AppCacheManagers.imageCache,
+      imageUrl: resolvedUrl,
       fit: fit,
-      loadingBuilder: (context, child, loadingProgress) {
-        if (loadingProgress == null) return child;
-        return Container(
-          color: Colors.grey[200],
-          child: Center(
-            child: CircularProgressIndicator(
-              value: loadingProgress.expectedTotalBytes != null
-                  ? loadingProgress.cumulativeBytesLoaded /
-                        loadingProgress.expectedTotalBytes!
-                  : null,
-              strokeWidth: 2,
-            ),
-          ),
-        );
-      },
-      errorBuilder: (context, error, stackTrace) {
-        return Container(
-          color: Colors.grey[200],
-          child: const Icon(Icons.error_outline, color: Colors.grey),
-        );
-      },
+      placeholder: (context, url) => Container(
+        color: Colors.grey[200],
+        alignment: Alignment.center,
+        child: const SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      ),
+      errorWidget: (context, url, error) => Container(
+        color: Colors.grey[200],
+        child: const Icon(Icons.error_outline, color: Colors.grey),
+      ),
     );
   }
 
@@ -841,16 +1411,26 @@ class _ProfilePageState extends State<ProfilePage> {
           child: _localProfileImage != null
               ? Image.file(_localProfileImage!, fit: BoxFit.contain)
               : (_remoteProfileImageUrl != null
-                    ? Image.network(
-                        _apiService.getFullImageUrl(_remoteProfileImageUrl!),
+                    ? CachedNetworkImage(
+                        cacheManager: AppCacheManagers.imageCache,
+                        imageUrl: _apiService.getFullImageUrl(
+                          _remoteProfileImageUrl!,
+                        ),
                         fit: BoxFit.contain,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            padding: EdgeInsets.all(32),
-                            alignment: Alignment.center,
-                            child: Icon(Icons.error_outline, size: 48),
-                          );
-                        },
+                        placeholder: (context, url) => Container(
+                          padding: const EdgeInsets.all(32),
+                          alignment: Alignment.center,
+                          child: const SizedBox(
+                            width: 32,
+                            height: 32,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                        errorWidget: (context, url, error) => Container(
+                          padding: const EdgeInsets.all(32),
+                          alignment: Alignment.center,
+                          child: const Icon(Icons.error_outline, size: 48),
+                        ),
                       )
                     : SizedBox.shrink()),
         ),
@@ -887,19 +1467,16 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
     );
 
-    final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
-
     try {
       await _apiService.deleteProfilePicture();
       if (!mounted) return;
-      navigator.pop();
+      Navigator.of(context).pop();
       setState(() {
         if (_userData != null) {
           _userData = {..._userData!, 'profilePicUrl': null};
         }
       });
-      messenger.showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Profile picture removed'),
           backgroundColor: Colors.green,
@@ -907,8 +1484,8 @@ class _ProfilePageState extends State<ProfilePage> {
       );
     } catch (e) {
       if (!mounted) return;
-      navigator.pop();
-      messenger.showSnackBar(
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Failed to remove profile picture'),
           backgroundColor: Colors.red,
@@ -921,9 +1498,10 @@ class _ProfilePageState extends State<ProfilePage> {
     try {
       await FirebaseAuth.instance.signOut();
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Failed to sign out')));
+      ).showSnackBar(const SnackBar(content: Text('Failed to sign out')));
     }
   }
 
@@ -934,15 +1512,28 @@ class _ProfilePageState extends State<ProfilePage> {
     final chatId = participants.join('_');
 
     final chatDoc = FirebaseFirestore.instance.collection('chats').doc(chatId);
-    final chatSnapshot = await chatDoc.get();
+    bool chatExists = false;
+    try {
+      final snapshot = await chatDoc.get();
+      chatExists = snapshot.exists;
+    } on FirebaseException catch (e) {
+      if (e.code != 'permission-denied') rethrow;
+      debugPrint(
+        'ProfilePage: chat lookup denied, treating as missing (chatId=$chatId)',
+      );
+    }
 
-    if (!chatSnapshot.exists) {
+    if (!chatExists) {
       await chatDoc.set({
         'participants': participants,
         'lastMessage': 'Chat started',
         'lastMessageTime': FieldValue.serverTimestamp(),
         'unreadCount': 0,
-      });
+      }, SetOptions(merge: true));
+    } else {
+      await chatDoc.set({
+        'participants': participants,
+      }, SetOptions(merge: true));
     }
 
     if (mounted) {
