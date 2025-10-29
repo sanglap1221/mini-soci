@@ -7,6 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:pay_go/firebase_options.dart';
 import 'package:pay_go/pages/auth_gate.dart';
 import 'package:pay_go/services/api_service.dart';
+import 'package:pay_go/services/notification_service.dart';
+import 'package:pay_go/widgets/notification_handler.dart';
+import 'package:pay_go/widgets/incoming_call_listener.dart';
 
 // You will need to generate this file using the FlutterFire CLI
 // import 'firebase_options.dart';
@@ -22,6 +25,10 @@ void main() async {
   );
   final overrideBaseUrl = await _resolveAndroidLocalBaseUrl();
   await ApiService().initialize(overrideBaseUrl: overrideBaseUrl);
+
+  // Initialize notification service
+  await NotificationService().initialize();
+
   runApp(const MyApp());
 }
 
@@ -33,7 +40,9 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Pay Go',
       theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
-      home: const AuthGate(),
+      home: const IncomingCallListener(
+        child: NotificationHandler(child: AuthGate()),
+      ),
       debugShowCheckedModeBanner: false,
     );
   }

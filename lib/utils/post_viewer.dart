@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
 
 import '../services/api_service.dart';
 import '../services/app_cache_managers.dart';
@@ -12,11 +15,14 @@ class PostViewer {
   static Future<void> show({
     required BuildContext context,
     required ApiService apiService,
+    String? mediaType,
     String? relativeImagePath,
+    String? relativeVideoPath,
     String? absoluteImageUrl,
     String? caption,
     String? infoText,
     String? postId,
+    String? postOwnerId,
     int? initialLikeCount,
     int? initialCommentCount,
     bool? initialIsLiked,
@@ -28,15 +34,23 @@ class PostViewer {
       relativeImagePath: relativeImagePath,
     );
 
+    final videoUrl = _resolveVideoUrl(
+      apiService: apiService,
+      relativeVideoPath: relativeVideoPath,
+    );
+
     await showDialog<void>(
       context: context,
       builder: (context) => Dialog(
         insetPadding: const EdgeInsets.all(16),
         child: _PostViewerDialog(
+          mediaType: mediaType,
           imageUrl: imageUrl,
+          videoUrl: videoUrl,
           caption: caption,
           infoText: infoText,
           postId: postId,
+          postOwnerId: postOwnerId,
           apiService: apiService,
           initialLikeCount: initialLikeCount,
           initialCommentCount: initialCommentCount,
@@ -57,6 +71,16 @@ class PostViewer {
     }
     if (relativeImagePath != null && relativeImagePath.isNotEmpty) {
       return apiService.getFullImageUrl(relativeImagePath);
+    }
+    return null;
+  }
+
+  static String? _resolveVideoUrl({
+    required ApiService apiService,
+    String? relativeVideoPath,
+  }) {
+    if (relativeVideoPath != null && relativeVideoPath.isNotEmpty) {
+      return apiService.getFullImageUrl(relativeVideoPath);
     }
     return null;
   }
@@ -94,22 +118,28 @@ class PostViewer {
 
 class _PostViewerDialog extends StatefulWidget {
   const _PostViewerDialog({
-    required this.imageUrl,
     required this.apiService,
+    this.mediaType,
+    this.imageUrl,
+    this.videoUrl,
     this.caption,
     this.infoText,
     this.postId,
+    this.postOwnerId,
     this.initialLikeCount,
     this.initialCommentCount,
     this.initialIsLiked,
     this.onInteractionChanged,
   });
 
-  final String? imageUrl;
   final ApiService apiService;
+  final String? mediaType;
+  final String? imageUrl;
+  final String? videoUrl;
   final String? caption;
   final String? infoText;
   final String? postId;
+  final String? postOwnerId;
   final int? initialLikeCount;
   final int? initialCommentCount;
   final bool? initialIsLiked;
@@ -210,7 +240,11 @@ class _PostViewerDialogState extends State<_PostViewerDialog> {
     });
 
     try {
-      final result = await widget.apiService.addComment(widget.postId!, text);
+      final result = await widget.apiService.addComment(
+        widget.postId!,
+        text,
+        postOwnerId: widget.postOwnerId,
+      );
       final comment = _extractComment(result) ?? _fallbackComment(text);
       if (!mounted) return;
       setState(() {
@@ -286,7 +320,10 @@ class _PostViewerDialogState extends State<_PostViewerDialog> {
 
     try {
       if (_isLiked) {
-        await widget.apiService.likePost(widget.postId!);
+        await widget.apiService.likePost(
+          widget.postId!,
+          postOwnerId: widget.postOwnerId,
+        );
       } else {
         await widget.apiService.unlikePost(widget.postId!);
       }
@@ -379,7 +416,7 @@ class _PostViewerDialogState extends State<_PostViewerDialog> {
                             horizontal: 16,
                             vertical: 8,
                           ),
-                          child: _buildImageInteractive(context),
+                          child: _buildMediaContent(context),
                         ),
                       ),
                       SliverToBoxAdapter(
@@ -441,7 +478,11 @@ class _PostViewerDialogState extends State<_PostViewerDialog> {
     );
   }
 
-  Widget _buildImageInteractive(BuildContext context) {
+  Widget _buildMediaContent(BuildContext context) {
+    final mediaType = widget.mediaType?.toLowerCase().trim();
+    final hasVideo = widget.videoUrl != null && widget.videoUrl!.isNotEmpty;
+    final isVideo = hasVideo && (mediaType == null || mediaType == 'video');
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = constraints.biggest;
@@ -452,11 +493,17 @@ class _PostViewerDialogState extends State<_PostViewerDialog> {
             height: side,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(16),
-              child: InteractiveViewer(
-                clipBehavior: Clip.none,
-                minScale: 1,
-                child: PostViewer._buildImageContent(widget.imageUrl),
-              ),
+              child: isVideo
+                  ? PostViewerVideoPlayer(
+                      key: ValueKey(widget.videoUrl!),
+                      videoUrl: widget.videoUrl!,
+                      autoplay: true,
+                    )
+                  : InteractiveViewer(
+                      clipBehavior: Clip.none,
+                      minScale: 1,
+                      child: PostViewer._buildImageContent(widget.imageUrl),
+                    ),
             ),
           ),
         );
@@ -592,7 +639,7 @@ class _PostViewerDialogState extends State<_PostViewerDialog> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Material(
-              color: Colors.redAccent.withValues(alpha: 0.1),
+              color: Colors.redAccent.withAlpha(25),
               borderRadius: BorderRadius.circular(12),
               child: Padding(
                 padding: const EdgeInsets.all(12),
@@ -964,3 +1011,261 @@ class PostViewerInteraction {
 
 typedef PostViewerInteractionCallback =
     void Function(PostViewerInteraction interaction);
+
+class PostViewerVideoPlayer extends StatefulWidget {
+  const PostViewerVideoPlayer({
+    super.key,
+    required this.videoUrl,
+    this.thumbnailUrl,
+    this.height,
+    this.autoplay = false,
+    this.enableFullscreen = true,
+    this.borderRadius = 0,
+  });
+
+  final String videoUrl;
+  final String? thumbnailUrl;
+  final double? height;
+  final bool autoplay;
+  final bool enableFullscreen;
+  final double borderRadius;
+
+  @override
+  State<PostViewerVideoPlayer> createState() => _PostViewerVideoPlayerState();
+}
+
+class _PostViewerVideoPlayerState extends State<PostViewerVideoPlayer> {
+  late final VideoPlayerController _controller;
+  bool _isInitialized = false;
+  bool _initializationFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
+    _controller.setLooping(true);
+    _controller
+        .initialize()
+        .then((_) {
+          if (!mounted) return;
+          setState(() {
+            _isInitialized = true;
+          });
+          if (widget.autoplay) {
+            unawaited(_controller.play());
+          }
+        })
+        .catchError((error, stackTrace) {
+          debugPrint(
+            'PostViewerVideoPlayer: failed to load ${widget.videoUrl}: $error',
+          );
+          if (!mounted) return;
+          setState(() {
+            _initializationFailed = true;
+          });
+        });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_controller.pause());
+    _controller.dispose();
+    super.dispose();
+  }
+
+  bool get _isPlaying => _isInitialized && _controller.value.isPlaying;
+
+  void _togglePlay() {
+    if (_initializationFailed || !_isInitialized) {
+      return;
+    }
+
+    if (_controller.value.isPlaying) {
+      unawaited(_controller.pause());
+    } else {
+      unawaited(_controller.play());
+    }
+
+    setState(() {});
+  }
+
+  Future<void> _openFullscreen() async {
+    final wasPlaying = _isPlaying;
+    if (wasPlaying) {
+      await _controller.pause();
+      setState(() {});
+    }
+
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (context) => _PostViewerFullscreenVideoPage(
+          videoUrl: widget.videoUrl,
+          thumbnailUrl: widget.thumbnailUrl,
+        ),
+        fullscreenDialog: true,
+      ),
+    );
+
+    if (wasPlaying && mounted) {
+      unawaited(_controller.play());
+      setState(() {});
+    }
+  }
+
+  Widget _buildVideoLayer() {
+    if (_initializationFailed) {
+      return Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        child: const Icon(
+          Icons.error_outline,
+          color: Colors.redAccent,
+          size: 40,
+        ),
+      );
+    }
+
+    if (_isInitialized) {
+      final size = _controller.value.size;
+      return FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: size.width == 0 ? 1 : size.width,
+          height: size.height == 0 ? 1 : size.height,
+          child: VideoPlayer(_controller),
+        ),
+      );
+    }
+
+    if (widget.thumbnailUrl != null && widget.thumbnailUrl!.isNotEmpty) {
+      return CachedNetworkImage(
+        imageUrl: widget.thumbnailUrl!,
+        fit: BoxFit.cover,
+        placeholder: (context, url) => Container(color: Colors.black12),
+        errorWidget: (context, url, error) => Container(
+          color: Colors.black45,
+          alignment: Alignment.center,
+          child: const Icon(Icons.movie, color: Colors.white54, size: 32),
+        ),
+      );
+    }
+
+    return Container(
+      color: Colors.black,
+      alignment: Alignment.center,
+      child: const Icon(Icons.movie, color: Colors.white54, size: 32),
+    );
+  }
+
+  Widget _wrapWithSizing(Widget child) {
+    final clippedChild = ClipRRect(
+      borderRadius: BorderRadius.circular(widget.borderRadius),
+      child: child,
+    );
+
+    if (widget.height != null) {
+      return SizedBox(
+        height: widget.height,
+        width: double.infinity,
+        child: clippedChild,
+      );
+    }
+
+    final aspectRatio = _isInitialized && _controller.value.aspectRatio > 0
+        ? _controller.value.aspectRatio
+        : 9 / 16;
+
+    return AspectRatio(aspectRatio: aspectRatio, child: clippedChild);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final media = Stack(
+      fit: StackFit.expand,
+      children: [
+        _buildVideoLayer(),
+        if (!_isInitialized && !_initializationFailed)
+          const Center(child: CircularProgressIndicator()),
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _togglePlay,
+          ),
+        ),
+        if (!_initializationFailed)
+          Center(
+            child: AnimatedOpacity(
+              opacity: _isPlaying ? 0 : 1,
+              duration: const Duration(milliseconds: 150),
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: Colors.black45,
+                  shape: BoxShape.circle,
+                ),
+                padding: const EdgeInsets.all(12),
+                child: Icon(
+                  _isPlaying ? Icons.pause : Icons.play_arrow,
+                  color: Colors.white,
+                  size: 32,
+                ),
+              ),
+            ),
+          ),
+        if (widget.enableFullscreen && !_initializationFailed)
+          Positioned(
+            right: 12,
+            bottom: 12,
+            child: GestureDetector(
+              onTap: _openFullscreen,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                padding: const EdgeInsets.all(6),
+                child: const Icon(
+                  Icons.fullscreen,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+
+    return _wrapWithSizing(media);
+  }
+}
+
+class _PostViewerFullscreenVideoPage extends StatelessWidget {
+  const _PostViewerFullscreenVideoPage({
+    required this.videoUrl,
+    this.thumbnailUrl,
+  });
+
+  final String videoUrl;
+  final String? thumbnailUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colors.white,
+      ),
+      body: Center(
+        child: PostViewerVideoPlayer(
+          videoUrl: videoUrl,
+          thumbnailUrl: thumbnailUrl,
+          height: null,
+          autoplay: true,
+          enableFullscreen: false,
+          borderRadius: 0,
+        ),
+      ),
+    );
+  }
+}

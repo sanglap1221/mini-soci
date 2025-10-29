@@ -9,6 +9,7 @@ import 'package:pay_go/services/app_cache_managers.dart';
 import 'package:pay_go/utils/time_formatter.dart';
 import 'package:pay_go/widgets/comments_sheet.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:video_player/video_player.dart';
 
 class ReelsPage extends StatefulWidget {
   const ReelsPage({super.key, this.refreshTrigger});
@@ -30,6 +31,7 @@ class _ReelsPageState extends State<ReelsPage> {
   List<dynamic>? _reels;
   bool _isLoading = true;
   String? _errorMessage;
+  int _currentIndex = 0;
 
   @override
   void initState() {
@@ -59,13 +61,32 @@ class _ReelsPageState extends State<ReelsPage> {
       });
 
       final posts = await _apiService.getPosts(forceRefresh: forceRefresh);
+      final videoPosts = posts.where((post) {
+        if (post is! Map<String, dynamic>) {
+          return false;
+        }
+        final videoPath = post['videoUrl'];
+        if (videoPath is String && videoPath.trim().isNotEmpty) {
+          return true;
+        }
+        final mediaType = (post['mediaType'] as String?)?.toLowerCase().trim();
+        return mediaType == 'video';
+      }).toList();
 
       if (!mounted) return;
       setState(() {
-        _reels = posts;
-        _syncPostInteractions(posts);
+        _reels = videoPosts;
+        _syncPostInteractions(videoPosts);
         _isLoading = false;
+        _currentIndex = 0;
       });
+      if (_pageController.hasClients) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_pageController.hasClients) {
+            _pageController.jumpToPage(0);
+          }
+        });
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -147,30 +168,39 @@ class _ReelsPageState extends State<ReelsPage> {
       );
     }
 
-    return GestureDetector(
-      onTap: () {},
-      child: PageView.builder(
-        controller: _pageController,
-        scrollDirection: Axis.vertical,
-        itemCount: _reels!.length,
-        itemBuilder: (context, index) {
-          final reel = _reels![index];
-          if (reel is! Map<String, dynamic>) {
-            return const SizedBox.shrink();
-          }
-          return GestureDetector(
-            onDoubleTap: () => _toggleLike(reel),
-            child: _buildReel(reel),
-          );
-        },
-      ),
+    return PageView.builder(
+      controller: _pageController,
+      scrollDirection: Axis.vertical,
+      physics: const ClampingScrollPhysics(),
+      onPageChanged: (index) {
+        if (_currentIndex != index) {
+          setState(() {
+            _currentIndex = index;
+          });
+        }
+      },
+      itemCount: _reels!.length,
+      itemBuilder: (context, index) {
+        final reel = _reels![index];
+        if (reel is! Map<String, dynamic>) {
+          return const SizedBox.shrink();
+        }
+        final isActive = index == _currentIndex;
+        return _buildReel(reel, isActive: isActive);
+      },
     );
   }
 
-  Widget _buildReel(Map<String, dynamic> reel) {
-    final rawPath = (reel['imageUrl'] as String?) ?? '';
-    final imageUrl = rawPath.isNotEmpty
-        ? _apiService.getFullImageUrl(rawPath)
+  Widget _buildReel(Map<String, dynamic> reel, {required bool isActive}) {
+    final rawImagePath = reel['imageUrl'] as String?;
+    final thumbnailPath = reel['thumbnailUrl'] as String?;
+    final fallbackImagePath = (rawImagePath != null && rawImagePath.isNotEmpty)
+        ? rawImagePath
+        : (thumbnailPath != null && thumbnailPath.isNotEmpty
+              ? thumbnailPath
+              : null);
+    final imageUrl = fallbackImagePath != null
+        ? _apiService.getFullImageUrl(fallbackImagePath)
         : null;
     final caption = reel['caption']?.toString().trim() ?? '';
     final username = _resolveUsername(reel);
@@ -185,103 +215,146 @@ class _ReelsPageState extends State<ReelsPage> {
     final isLiked = interaction.isLiked;
     final isLikeLoading = interaction.isLikeLoading;
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Positioned.fill(child: _buildBackgroundImage(imageUrl)),
-        Positioned.fill(
-          child: IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.bottomCenter,
-                  end: Alignment.topCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: 0.65),
-                    Colors.black.withValues(alpha: 0.1),
-                  ],
-                  stops: const [0.0, 0.7],
+    final mediaWidget = _buildReelMedia(
+      reel: reel,
+      fallbackImageUrl: imageUrl,
+      isActive: isActive,
+    );
+
+    return Container(
+      color: Colors.black,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(child: mediaWidget),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.65),
+                      Colors.black.withValues(alpha: 0.1),
+                    ],
+                    stops: const [0.0, 0.7],
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-        Positioned(
-          left: 16,
-          bottom: 32,
-          right: 96,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (username.isNotEmpty)
-                GestureDetector(
-                  onTap: () {
-                    final userId = reel['userId'] as String?;
-                    if (userId != null && userId.isNotEmpty) {
-                      _navigateToUserProfile(userId);
-                    }
-                  },
-                  child: Text(
-                    '@$username',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+          Positioned(
+            left: 16,
+            bottom: 32,
+            right: 96,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (username.isNotEmpty)
+                  GestureDetector(
+                    onTap: () {
+                      final userId = reel['userId'] as String?;
+                      if (userId != null && userId.isNotEmpty) {
+                        _navigateToUserProfile(userId);
+                      }
+                    },
+                    child: Text(
+                      '@$username',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
                     ),
                   ),
-                ),
-              if (caption.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    caption,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                if (caption.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      caption,
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                    ),
                   ),
-                ),
-              if (timestamp != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    timestamp,
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                if (timestamp != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      timestamp,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                    ),
                   ),
+              ],
+            ),
+          ),
+          Positioned(
+            right: 20,
+            bottom: 32,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildVerticalAction(
+                  icon: isLiked ? Icons.favorite : Icons.favorite_border,
+                  color: isLiked ? Colors.redAccent : Colors.white,
+                  label: '$likeCount',
+                  onTap: () => _toggleLike(reel),
+                  isBusy: isLikeLoading,
                 ),
-            ],
+                const SizedBox(height: 16),
+                _buildVerticalAction(
+                  icon: Icons.mode_comment_outlined,
+                  color: Colors.white,
+                  label: '$commentCount',
+                  onTap: () => _openComments(reel),
+                ),
+                const SizedBox(height: 16),
+                _buildVerticalAction(
+                  icon: Icons.share_outlined,
+                  color: Colors.white,
+                  label: 'Share',
+                  onTap: () => _shareReel(reel),
+                ),
+              ],
+            ),
           ),
-        ),
-        Positioned(
-          right: 20,
-          bottom: 32,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildVerticalAction(
-                icon: isLiked ? Icons.favorite : Icons.favorite_border,
-                color: isLiked ? Colors.redAccent : Colors.white,
-                label: '$likeCount',
-                onTap: () => _toggleLike(reel),
-                isBusy: isLikeLoading,
-              ),
-              const SizedBox(height: 16),
-              _buildVerticalAction(
-                icon: Icons.mode_comment_outlined,
-                color: Colors.white,
-                label: '$commentCount',
-                onTap: () => _openComments(reel),
-              ),
-              const SizedBox(height: 16),
-              _buildVerticalAction(
-                icon: Icons.share_outlined,
-                color: Colors.white,
-                label: 'Share',
-                onTap: () => _shareReel(reel),
-              ),
-            ],
-          ),
-        ),
-      ],
+        ],
+      ),
     );
+  }
+
+  Widget _buildReelMedia({
+    required Map<String, dynamic> reel,
+    required String? fallbackImageUrl,
+    required bool isActive,
+  }) {
+    final mediaType = (reel['mediaType'] as String?)?.toLowerCase().trim();
+    final videoPath = reel['videoUrl'] as String?;
+    if (videoPath != null && videoPath.isNotEmpty) {
+      final videoUrl = _apiService.getFullImageUrl(videoPath);
+      final thumbnailPath = reel['thumbnailUrl'] as String?;
+      final resolvedThumbnail =
+          (thumbnailPath != null && thumbnailPath.isNotEmpty)
+          ? _apiService.getFullImageUrl(thumbnailPath)
+          : fallbackImageUrl;
+      return ReelVideoPlayer(
+        key: ValueKey(videoUrl),
+        videoUrl: videoUrl,
+        thumbnailUrl: resolvedThumbnail,
+        isActive: isActive,
+        onDoubleTap: () => _toggleLike(reel),
+      );
+    }
+
+    if (mediaType == 'video') {
+      // If the API marks it as a video but no path provided, show fallback.
+      return _buildBackgroundImage(fallbackImageUrl);
+    }
+
+    return _buildBackgroundImage(fallbackImageUrl);
   }
 
   Widget _buildBackgroundImage(String? imageUrl) {
@@ -394,8 +467,9 @@ class _ReelsPageState extends State<ReelsPage> {
     });
 
     try {
+      final postOwnerId = _resolvePostOwnerId(reel);
       final response = nextLiked
-          ? await _apiService.likePost(postId)
+          ? await _apiService.likePost(postId, postOwnerId: postOwnerId)
           : await _apiService.unlikePost(postId);
 
       final serverCount = _extractCountFromResponse(response, const [
@@ -450,12 +524,15 @@ class _ReelsPageState extends State<ReelsPage> {
       () => _createStateFromPost(reel),
     );
 
+    final postOwnerId = _resolvePostOwnerId(reel);
+
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       builder: (context) => CommentsSheet(
         apiService: _apiService,
         postId: postId,
+        postOwnerId: postOwnerId,
         initialCommentCount: interaction.commentCount,
         onCountUpdated: (updatedCount) {
           if (!mounted) return;
@@ -475,9 +552,19 @@ class _ReelsPageState extends State<ReelsPage> {
 
   Future<void> _shareReel(Map<String, dynamic> reel) async {
     final caption = reel['caption']?.toString().trim() ?? '';
-    final rawPath = (reel['imageUrl'] as String?) ?? '';
-    final resolvedImageUrl = rawPath.isNotEmpty
-        ? _apiService.getFullImageUrl(rawPath)
+    final rawImagePath = reel['imageUrl'] as String?;
+    final thumbnailPath = reel['thumbnailUrl'] as String?;
+    final fallbackImagePath = (rawImagePath != null && rawImagePath.isNotEmpty)
+        ? rawImagePath
+        : (thumbnailPath != null && thumbnailPath.isNotEmpty
+              ? thumbnailPath
+              : null);
+    final resolvedImageUrl = fallbackImagePath != null
+        ? _apiService.getFullImageUrl(fallbackImagePath)
+        : null;
+    final videoPath = reel['videoUrl'] as String?;
+    final resolvedVideoUrl = videoPath != null && videoPath.isNotEmpty
+        ? _apiService.getFullImageUrl(videoPath)
         : null;
     final postId = _extractPostId(reel);
 
@@ -491,6 +578,11 @@ class _ReelsPageState extends State<ReelsPage> {
     if (resolvedImageUrl != null && resolvedImageUrl.isNotEmpty) {
       if (hasContent) buffer.writeln();
       buffer.writeln(resolvedImageUrl);
+      hasContent = true;
+    }
+    if (resolvedVideoUrl != null && resolvedVideoUrl.isNotEmpty) {
+      if (hasContent) buffer.writeln();
+      buffer.writeln(resolvedVideoUrl);
       hasContent = true;
     }
     if (postId != null) {
@@ -600,6 +692,47 @@ class _ReelsPageState extends State<ReelsPage> {
         return candidate.toString();
       }
     }
+    return null;
+  }
+
+  String? _resolvePostOwnerId(Map<String, dynamic> post) {
+    final directCandidates = [
+      post['userId'],
+      post['ownerId'],
+      post['authorId'],
+      post['creatorId'],
+    ];
+    for (final candidate in directCandidates) {
+      if (candidate is String && candidate.isNotEmpty) {
+        return candidate;
+      }
+      if (candidate is int) {
+        return candidate.toString();
+      }
+    }
+
+    final author = post['author'];
+    if (author is Map<String, dynamic>) {
+      final authorId = author['id'] ?? author['uid'];
+      if (authorId is String && authorId.isNotEmpty) {
+        return authorId;
+      }
+      if (authorId is int) {
+        return authorId.toString();
+      }
+    }
+
+    final user = post['user'];
+    if (user is Map<String, dynamic>) {
+      final userId = user['id'] ?? user['uid'];
+      if (userId is String && userId.isNotEmpty) {
+        return userId;
+      }
+      if (userId is int) {
+        return userId.toString();
+      }
+    }
+
     return null;
   }
 
@@ -785,4 +918,264 @@ class _ReelsPageState extends State<ReelsPage> {
       MaterialPageRoute(builder: (context) => ProfilePage(userId: userId)),
     );
   }
+}
+
+class ReelVideoPlayer extends StatefulWidget {
+  const ReelVideoPlayer({
+    super.key,
+    required this.videoUrl,
+    this.thumbnailUrl,
+    required this.isActive,
+    this.onDoubleTap,
+  });
+
+  final String videoUrl;
+  final String? thumbnailUrl;
+  final bool isActive;
+  final VoidCallback? onDoubleTap;
+
+  @override
+  State<ReelVideoPlayer> createState() => _ReelVideoPlayerState();
+}
+
+class _ReelVideoPlayerState extends State<ReelVideoPlayer>
+    with AutomaticKeepAliveClientMixin {
+  VideoPlayerController? _controller;
+  bool _isInitialized = false;
+  bool _initializationFailed = false;
+  bool _showHeartAnimation = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeController();
+  }
+
+  @override
+  void didUpdateWidget(ReelVideoPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.videoUrl != widget.videoUrl) {
+      _disposeController();
+      _initializationFailed = false;
+      _isInitialized = false;
+      _initializeController();
+    } else if (oldWidget.isActive != widget.isActive) {
+      _updatePlayback();
+    }
+  }
+
+  Future<void> _initializeController() async {
+    try {
+      final controller = VideoPlayerController.networkUrl(
+        Uri.parse(widget.videoUrl),
+      )..setLooping(true);
+      await controller.initialize();
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      _controller = controller;
+      setState(() {
+        _isInitialized = true;
+      });
+      _updatePlayback();
+    } catch (error, stackTrace) {
+      debugPrint('ReelVideoPlayer: failed to load ${widget.videoUrl}: $error');
+      debugPrint(stackTrace.toString());
+      if (!mounted) return;
+      setState(() {
+        _initializationFailed = true;
+      });
+    }
+  }
+
+  void _updatePlayback() {
+    final controller = _controller;
+    if (controller == null || !_isInitialized) {
+      return;
+    }
+
+    if (widget.isActive) {
+      if (!controller.value.isPlaying) {
+        unawaited(controller.play());
+      }
+      unawaited(controller.setVolume(1));
+    } else {
+      if (controller.value.isPlaying) {
+        unawaited(controller.pause());
+      }
+      unawaited(controller.setVolume(0));
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _togglePlayPause() {
+    final controller = _controller;
+    if (controller == null || !_isInitialized) {
+      return;
+    }
+
+    if (controller.value.isPlaying) {
+      unawaited(controller.pause());
+    } else {
+      unawaited(controller.play());
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _handleDoubleTap() {
+    widget.onDoubleTap?.call();
+
+    setState(() {
+      _showHeartAnimation = true;
+    });
+
+    Future.delayed(const Duration(milliseconds: 800), () {
+      if (mounted) {
+        setState(() {
+          _showHeartAnimation = false;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposeController();
+    super.dispose();
+  }
+
+  void _disposeController() {
+    final controller = _controller;
+    if (controller != null) {
+      unawaited(controller.pause());
+      controller.dispose();
+    }
+    _controller = null;
+  }
+
+  Widget _buildLoadingLayer() {
+    if (widget.thumbnailUrl != null && widget.thumbnailUrl!.isNotEmpty) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          CachedNetworkImage(
+            cacheManager: AppCacheManagers.imageCache,
+            imageUrl: widget.thumbnailUrl!,
+            fit: BoxFit.cover,
+            placeholder: (context, url) => Container(color: Colors.black),
+            errorWidget: (context, url, error) => _buildErrorPlaceholder(),
+          ),
+          const Center(child: CircularProgressIndicator()),
+        ],
+      );
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: const [
+        ColoredBox(color: Colors.black),
+        Center(child: CircularProgressIndicator()),
+      ],
+    );
+  }
+
+  Widget _buildErrorPlaceholder() {
+    return Container(
+      color: Colors.black,
+      alignment: Alignment.center,
+      child: const Icon(Icons.videocam_off, color: Colors.white38, size: 56),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+
+    if (_initializationFailed) {
+      return _buildErrorPlaceholder();
+    }
+
+    final controller = _controller;
+    if (!_isInitialized || controller == null) {
+      return _buildLoadingLayer();
+    }
+
+    final size = controller.value.size;
+    final width = size.width == 0 ? 1.0 : size.width;
+    final height = size.height == 0 ? 1.0 : size.height;
+
+    return GestureDetector(
+      onTap: _togglePlayPause,
+      onDoubleTap: _handleDoubleTap,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: width,
+              height: height,
+              child: VideoPlayer(controller),
+            ),
+          ),
+          if (!controller.value.isPlaying)
+            Center(
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.5),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.play_arrow,
+                  color: Colors.white,
+                  size: 50,
+                ),
+              ),
+            ),
+          if (_showHeartAnimation)
+            Center(
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0.0, end: 1.0),
+                duration: const Duration(milliseconds: 600),
+                curve: Curves.elasticOut,
+                onEnd: () {
+                  setState(() {
+                    _showHeartAnimation = false;
+                  });
+                },
+                builder: (context, value, child) {
+                  // Scale from 0.5 to 1.2 then back to 1.0
+                  final scale = 0.5 + (value * 0.7);
+                  // Fade out: 1.0 at start, 0.0 at end
+                  final opacity = (1.0 - value).clamp(0.0, 1.0);
+
+                  return Transform.scale(
+                    scale: scale,
+                    child: Opacity(
+                      opacity: opacity,
+                      child: const Icon(
+                        Icons.favorite,
+                        color: Colors.white,
+                        size: 100,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  bool get wantKeepAlive => true;
 }

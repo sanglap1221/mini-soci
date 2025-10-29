@@ -12,9 +12,11 @@ import 'package:pay_go/utils/post_viewer.dart';
 import 'package:pay_go/utils/time_formatter.dart';
 import 'package:pay_go/widgets/comments_sheet.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:flutter/gestures.dart';
 import 'package:video_player/video_player.dart';
 import 'notifications_page.dart';
 import 'profile_page.dart';
+import 'search_page.dart';
 
 class FeedPage extends StatefulWidget {
   const FeedPage({super.key, this.refreshTrigger});
@@ -218,7 +220,48 @@ class _FeedPageState extends State<FeedPage> {
       'FeedPage build method called - isLoading: $_isLoading, postsCount: ${_posts?.length}',
     );
     return Scaffold(
-      appBar: AppBar(title: Text('Feed'), actions: _buildAppBarActions()),
+      appBar: AppBar(
+        title: Row(
+          children: [
+            const Text('Feed'),
+            const SizedBox(width: 12),
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const SearchPage()),
+                  );
+                },
+                child: Container(
+                  height: 36,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.grey[300]!),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.search, color: Colors.grey[600], size: 18),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Search',
+                        style: TextStyle(
+                          color: Colors.grey[600],
+                          fontSize: 14,
+                          fontWeight: FontWeight.normal,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: _buildAppBarActions(),
+      ),
       body: RefreshIndicator(
         onRefresh: () => _loadPosts(forceRefresh: true),
         child: _buildBody(),
@@ -574,6 +617,7 @@ class _FeedPageState extends State<FeedPage> {
     final likeCount = interactionState.likeCount;
     final commentCount = interactionState.commentCount;
     final isLiked = interactionState.isLiked;
+    final postOwnerId = _resolvePostOwnerId(post);
 
     final imageWidget = CachedNetworkImage(
       cacheManager: AppCacheManagers.imageCache,
@@ -605,6 +649,7 @@ class _FeedPageState extends State<FeedPage> {
           caption: caption,
           infoText: infoText,
           postId: postId,
+          postOwnerId: postOwnerId,
           initialLikeCount: likeCount,
           initialCommentCount: commentCount,
           initialIsLiked: isLiked,
@@ -827,8 +872,9 @@ class _FeedPageState extends State<FeedPage> {
     });
 
     try {
+      final postOwnerId = _resolvePostOwnerId(post);
       final response = nextLiked
-          ? await _apiService.likePost(postId)
+          ? await _apiService.likePost(postId, postOwnerId: postOwnerId)
           : await _apiService.unlikePost(postId);
 
       final serverCount = _extractCountFromResponse(response, const [
@@ -883,12 +929,15 @@ class _FeedPageState extends State<FeedPage> {
       () => _createStateFromPost(post),
     );
 
+    final postOwnerId = _resolvePostOwnerId(post);
+
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       builder: (context) => CommentsSheet(
         apiService: _apiService,
         postId: postId,
+        postOwnerId: postOwnerId,
         initialCommentCount: interaction.commentCount,
         onCountUpdated: (updatedCount) {
           if (!mounted) return;
@@ -985,6 +1034,47 @@ class _FeedPageState extends State<FeedPage> {
         return candidate.toString();
       }
     }
+    return null;
+  }
+
+  String? _resolvePostOwnerId(Map<String, dynamic> post) {
+    final directCandidates = [
+      post['userId'],
+      post['ownerId'],
+      post['authorId'],
+      post['creatorId'],
+    ];
+    for (final candidate in directCandidates) {
+      if (candidate is String && candidate.isNotEmpty) {
+        return candidate;
+      }
+      if (candidate is int) {
+        return candidate.toString();
+      }
+    }
+
+    final author = post['author'];
+    if (author is Map<String, dynamic>) {
+      final authorId = author['id'] ?? author['uid'];
+      if (authorId is String && authorId.isNotEmpty) {
+        return authorId;
+      }
+      if (authorId is int) {
+        return authorId.toString();
+      }
+    }
+
+    final user = post['user'];
+    if (user is Map<String, dynamic>) {
+      final userId = user['id'] ?? user['uid'];
+      if (userId is String && userId.isNotEmpty) {
+        return userId;
+      }
+      if (userId is int) {
+        return userId.toString();
+      }
+    }
+
     return null;
   }
 
@@ -1298,9 +1388,17 @@ class _FeedVideoPlayerState extends State<FeedVideoPlayer> {
         if (!_isInitialized && !_initializationFailed)
           const Center(child: CircularProgressIndicator()),
         Positioned.fill(
-          child: GestureDetector(
+          child: RawGestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: _togglePlay,
+            gestures: <Type, GestureRecognizerFactory>{
+              TapGestureRecognizer:
+                  GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                    () => TapGestureRecognizer(),
+                    (TapGestureRecognizer instance) {
+                      instance.onTap = _togglePlay;
+                    },
+                  ),
+            },
           ),
         ),
         if (!_initializationFailed)

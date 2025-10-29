@@ -3,12 +3,15 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:path_provider/path_provider.dart';
 import '../services/api_service.dart';
 import '../services/app_cache_managers.dart';
 import '../utils/image_crop_helper.dart';
 import '../utils/post_viewer.dart';
 import '../utils/time_formatter.dart';
 import 'chat_screen.dart';
+import 'friends_list_page.dart';
 
 class ProfilePage extends StatefulWidget {
   final String? userId;
@@ -542,18 +545,24 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Widget _buildFriendCountRow() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            _formatCount(_friendCount),
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          Text('Friends', style: TextStyle(color: Colors.grey[600])),
-        ],
+    return InkWell(
+      onTap: () {
+        debugPrint('Friends count tapped! userId: $profileUserId');
+        _navigateToFriendsList();
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _formatCount(_friendCount),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text('Friends', style: TextStyle(color: Colors.grey[600])),
+          ],
+        ),
       ),
     );
   }
@@ -1081,11 +1090,11 @@ class _ProfilePageState extends State<ProfilePage> {
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      padding: const EdgeInsets.all(4),
+      padding: const EdgeInsets.all(2),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        crossAxisSpacing: 4,
-        mainAxisSpacing: 4,
+        crossAxisSpacing: 2,
+        mainAxisSpacing: 2,
       ),
       itemCount: posts.length,
       itemBuilder: (context, index) {
@@ -1099,24 +1108,36 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Widget _buildPostTile(BuildContext context, Map<String, dynamic> post) {
-    final imagePath = post['imageUrl'] as String?;
-    final caption = post['caption']?.toString();
+    final mediaType = (post['mediaType'] as String?)?.toLowerCase().trim();
+    final rawImagePath = post['imageUrl'] as String?;
+    final thumbnailPath = post['thumbnailUrl'] as String?;
+    final videoPath = post['videoUrl'] as String?;
+    final imagePath = (rawImagePath != null && rawImagePath.isNotEmpty)
+        ? rawImagePath
+        : (thumbnailPath != null && thumbnailPath.isNotEmpty
+              ? thumbnailPath
+              : null);
+    final caption = post['caption']?.toString() ?? '';
     final createdAt = post['createdAt'];
     final formattedInfo = formatTimestamp(createdAt);
     final postId = _extractPostId(post);
     final likeCount = _readLikeCount(post) ?? 0;
     final commentCount = _readCommentCount(post) ?? 0;
     final isLiked = _readIsLiked(post) ?? false;
+    final postOwnerId = _resolvePostOwnerId(post);
 
     return GestureDetector(
       onTap: () {
         PostViewer.show(
           context: context,
           apiService: _apiService,
+          mediaType: mediaType,
           relativeImagePath: imagePath,
+          relativeVideoPath: videoPath,
           caption: caption,
           infoText: formattedInfo != null ? 'Posted $formattedInfo' : null,
           postId: postId,
+          postOwnerId: postOwnerId,
           initialLikeCount: likeCount,
           initialCommentCount: commentCount,
           initialIsLiked: isLiked,
@@ -1155,13 +1176,20 @@ class _ProfilePageState extends State<ProfilePage> {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(4),
           border: Border.all(color: Colors.grey[300]!, width: 0.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 2,
+              offset: const Offset(0, 1),
+            ),
+          ],
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Stack(
             fit: StackFit.expand,
             children: [
-              _buildPostImageWidget(imagePath),
+              _buildPostMediaWidget(post),
               _buildPostTileOverlay(likeCount, commentCount),
             ],
           ),
@@ -1170,12 +1198,86 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  Widget _buildPostImageWidget(
-    String? relativeUrl, {
-    BoxFit fit = BoxFit.cover,
-  }) {
-    final resolvedUrl = _resolvePostImageUrl(relativeUrl);
-    if (resolvedUrl == null) {
+  Widget _buildPostMediaWidget(Map<String, dynamic> post) {
+    final mediaType = (post['mediaType'] as String?)?.toLowerCase().trim();
+    final videoPath = post['videoUrl'] as String?;
+    final thumbnailPath = post['thumbnailUrl'] as String?;
+    final imagePath = post['imageUrl'] as String?;
+
+    if (mediaType == 'video' && videoPath != null && videoPath.isNotEmpty) {
+      final resolvedThumbUrl = thumbnailPath != null && thumbnailPath.isNotEmpty
+          ? _apiService.getFullImageUrl(thumbnailPath)
+          : null;
+      final videoUrl = _apiService.getFullImageUrl(videoPath);
+
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          if (resolvedThumbUrl != null)
+            CachedNetworkImage(
+              cacheManager: AppCacheManagers.imageCache,
+              imageUrl: resolvedThumbUrl,
+              fit: BoxFit.cover,
+              placeholder: (context, url) => Container(
+                color: Colors.black12,
+                alignment: Alignment.center,
+                child: const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+              errorWidget: (context, url, error) => _VideoThumbnailGenerator(
+                videoUrl: videoUrl,
+                fallback: _buildVideoFallback(),
+              ),
+            )
+          else
+            _VideoThumbnailGenerator(
+              videoUrl: videoUrl,
+              fallback: _buildVideoFallback(),
+            ),
+          // Gradient overlay for better icon visibility
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.transparent, Colors.black.withOpacity(0.3)],
+              ),
+            ),
+          ),
+          // Play icon overlay
+          const Positioned(
+            top: 8,
+            right: 8,
+            child: Icon(
+              Icons.play_circle_filled,
+              color: Colors.white,
+              size: 32,
+              shadows: [Shadow(blurRadius: 4, color: Colors.black45)],
+            ),
+          ),
+          // Video duration indicator (optional - can be added if backend provides duration)
+          const Positioned(
+            bottom: 8,
+            right: 8,
+            child: Icon(
+              Icons.videocam_rounded,
+              color: Colors.white,
+              size: 20,
+              shadows: [Shadow(blurRadius: 4, color: Colors.black45)],
+            ),
+          ),
+        ],
+      );
+    }
+
+    final resolvedImageUrl = imagePath != null && imagePath.isNotEmpty
+        ? _apiService.getFullImageUrl(imagePath)
+        : null;
+
+    if (resolvedImageUrl == null) {
       return Container(
         color: Colors.grey[200],
         child: const Icon(Icons.image, color: Colors.grey),
@@ -1184,8 +1286,8 @@ class _ProfilePageState extends State<ProfilePage> {
 
     return CachedNetworkImage(
       cacheManager: AppCacheManagers.imageCache,
-      imageUrl: resolvedUrl,
-      fit: fit,
+      imageUrl: resolvedImageUrl,
+      fit: BoxFit.cover,
       placeholder: (context, url) => Container(
         color: Colors.grey[200],
         alignment: Alignment.center,
@@ -1202,11 +1304,40 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  String? _resolvePostImageUrl(String? relativeUrl) {
-    if (relativeUrl == null || relativeUrl.isEmpty) {
-      return null;
-    }
-    return _apiService.getFullImageUrl(relativeUrl);
+  Widget _buildVideoFallback() {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.purple.shade900,
+            Colors.purple.shade700,
+            Colors.pink.shade700,
+          ],
+        ),
+      ),
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.video_library_rounded,
+            color: Colors.white.withOpacity(0.9),
+            size: 48,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Video',
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.8),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildPostTileOverlay(int likeCount, int commentCount) {
@@ -1265,6 +1396,47 @@ class _ProfilePageState extends State<ProfilePage> {
         return candidate.toString();
       }
     }
+    return null;
+  }
+
+  String? _resolvePostOwnerId(Map<String, dynamic> post) {
+    final directCandidates = [
+      post['userId'],
+      post['ownerId'],
+      post['authorId'],
+      post['creatorId'],
+    ];
+    for (final candidate in directCandidates) {
+      if (candidate is String && candidate.isNotEmpty) {
+        return candidate;
+      }
+      if (candidate is int) {
+        return candidate.toString();
+      }
+    }
+
+    final author = post['author'];
+    if (author is Map<String, dynamic>) {
+      final authorId = author['id'] ?? author['uid'];
+      if (authorId is String && authorId.isNotEmpty) {
+        return authorId;
+      }
+      if (authorId is int) {
+        return authorId.toString();
+      }
+    }
+
+    final user = post['user'];
+    if (user is Map<String, dynamic>) {
+      final userId = user['id'] ?? user['uid'];
+      if (userId is String && userId.isNotEmpty) {
+        return userId;
+      }
+      if (userId is int) {
+        return userId.toString();
+      }
+    }
+
     return null;
   }
 
@@ -1547,6 +1719,24 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  void _navigateToFriendsList() {
+    debugPrint('Navigating to friends list...');
+    final userName =
+        _userData?['userName'] as String? ??
+        _userData?['displayName'] as String? ??
+        'User';
+
+    debugPrint('userName: $userName, profileUserId: $profileUserId');
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) =>
+            FriendsListPage(userId: profileUserId, userName: userName),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1644,10 +1834,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   child: SizedBox(
                     width: 60,
                     height: 60,
-                    child: _buildPostImageWidget(
-                      post['imageUrl'] as String?,
-                      fit: BoxFit.cover,
-                    ),
+                    child: _buildPostMediaWidget(post),
                   ),
                 ),
                 SizedBox(width: 12),
@@ -1711,10 +1898,7 @@ class _ProfilePageState extends State<ProfilePage> {
               child: SizedBox(
                 width: 120,
                 height: 120,
-                child: _buildPostImageWidget(
-                  post['imageUrl'] as String?,
-                  fit: BoxFit.cover,
-                ),
+                child: _buildPostMediaWidget(post),
               ),
             ),
             SizedBox(height: 12),
@@ -1780,5 +1964,84 @@ class _ProfilePageState extends State<ProfilePage> {
         );
       }
     }
+  }
+}
+
+/// Widget that generates a video thumbnail from the first frame
+class _VideoThumbnailGenerator extends StatefulWidget {
+  final String videoUrl;
+  final Widget fallback;
+
+  const _VideoThumbnailGenerator({
+    required this.videoUrl,
+    required this.fallback,
+  });
+
+  @override
+  State<_VideoThumbnailGenerator> createState() =>
+      _VideoThumbnailGeneratorState();
+}
+
+class _VideoThumbnailGeneratorState extends State<_VideoThumbnailGenerator> {
+  String? _thumbnailPath;
+  bool _isLoading = true;
+  bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _generateThumbnail();
+  }
+
+  Future<void> _generateThumbnail() async {
+    try {
+      final thumbnail = await VideoThumbnail.thumbnailFile(
+        video: widget.videoUrl,
+        thumbnailPath: (await getTemporaryDirectory()).path,
+        imageFormat: ImageFormat.PNG,
+        maxWidth: 300,
+        quality: 75,
+      );
+
+      if (mounted) {
+        setState(() {
+          _thumbnailPath = thumbnail;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error generating video thumbnail: $e');
+      if (mounted) {
+        setState(() {
+          _hasError = true;
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Container(
+        color: Colors.black12,
+        alignment: Alignment.center,
+        child: const SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+
+    if (_hasError || _thumbnailPath == null) {
+      return widget.fallback;
+    }
+
+    return Image.file(
+      File(_thumbnailPath!),
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => widget.fallback,
+    );
   }
 }

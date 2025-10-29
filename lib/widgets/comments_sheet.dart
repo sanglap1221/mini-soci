@@ -9,12 +9,14 @@ class CommentsSheet extends StatefulWidget {
     super.key,
     required this.apiService,
     required this.postId,
+    this.postOwnerId,
     this.initialCommentCount = 0,
     this.onCountUpdated,
   });
 
   final ApiService apiService;
   final String postId;
+  final String? postOwnerId;
   final int initialCommentCount;
   final ValueChanged<int>? onCountUpdated;
 
@@ -95,7 +97,11 @@ class _CommentsSheetState extends State<CommentsSheet> {
     });
 
     try {
-      final result = await widget.apiService.addComment(widget.postId, text);
+      final result = await widget.apiService.addComment(
+        widget.postId,
+        text,
+        postOwnerId: widget.postOwnerId,
+      );
       final comment = _extractComment(result) ?? _fallbackComment(text);
 
       if (!mounted) return;

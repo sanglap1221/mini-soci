@@ -40,6 +40,199 @@ class ApiService {
   CollectionReference<Map<String, dynamic>> get _notificationsCollection =>
       _firestore.collection('notifications');
 
+  Future<void> _enqueueNotification({
+    required String toUserId,
+    required String type,
+    Map<String, dynamic>? payload,
+  }) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      throw Exception('Not authenticated');
+    }
+
+    if (toUserId.isEmpty || toUserId == currentUser.uid) {
+      return;
+    }
+
+    final fromDisplayName = currentUser.displayName;
+    final fromPhotoUrl = currentUser.photoURL;
+
+    final notificationData = <String, dynamic>{
+      'fromUserId': currentUser.uid,
+      'toUserId': toUserId,
+      'type': type,
+      'createdAt': FieldValue.serverTimestamp(),
+      'isRead': false,
+      'readAt': null,
+      if (payload != null && payload.isNotEmpty) 'payload': payload,
+      if (fromDisplayName != null && fromDisplayName.trim().isNotEmpty)
+        'fromUserName': fromDisplayName.trim(),
+      if (fromPhotoUrl != null && fromPhotoUrl.trim().isNotEmpty)
+        'fromUserAvatar': fromPhotoUrl.trim(),
+    };
+
+    try {
+      await _notificationsCollection.add(notificationData);
+    } catch (error, stackTrace) {
+      _log('Failed to enqueue notification ($type -> $toUserId): $error');
+      _log(stackTrace.toString());
+    }
+  }
+
+  Future<void> _maybeNotifyPostComment({
+    required String postId,
+    required String? postOwnerId,
+    required dynamic response,
+    required String commentText,
+  }) async {
+    if (postOwnerId == null || postOwnerId.isEmpty) {
+      return;
+    }
+
+    final commenter = FirebaseAuth.instance.currentUser;
+    if (commenter == null || commenter.uid == postOwnerId) {
+      return;
+    }
+
+    final commentId = _extractCommentIdFromResponse(response);
+    final trimmed = commentText.trim();
+    final preview = trimmed.length > 120
+        ? '${trimmed.substring(0, 117).trimRight()}...'
+        : trimmed;
+
+    final payload = <String, dynamic>{'postId': postId};
+    if (commentId != null) {
+      payload['commentId'] = commentId;
+    }
+    if (preview.isNotEmpty) {
+      payload['commentPreview'] = preview;
+    }
+
+    await _enqueueNotification(
+      toUserId: postOwnerId,
+      type: 'post_comment',
+      payload: payload,
+    );
+  }
+
+  Future<void> _maybeNotifyPostLike({
+    required String postId,
+    required String? postOwnerId,
+    required dynamic response,
+  }) async {
+    if (postOwnerId == null || postOwnerId.isEmpty) {
+      return;
+    }
+
+    final liker = FirebaseAuth.instance.currentUser;
+    if (liker == null || liker.uid == postOwnerId) {
+      return;
+    }
+
+    final likeCount = _extractLikeCountFromResponse(response);
+    final payload = <String, dynamic>{'postId': postId};
+    if (likeCount != null) {
+      payload['likeCount'] = likeCount;
+    }
+
+    await _enqueueNotification(
+      toUserId: postOwnerId,
+      type: 'post_like',
+      payload: payload,
+    );
+  }
+
+  String? _extractCommentIdFromResponse(dynamic response) {
+    final root = _normalizeToMap(response);
+    if (root == null) {
+      return null;
+    }
+
+    final scopes = <Map<String, dynamic>>[];
+    scopes.add(root);
+
+    final data = root['data'];
+    if (data is Map<String, dynamic>) {
+      scopes.add(data);
+    }
+
+    final comment = root['comment'];
+    if (comment is Map<String, dynamic>) {
+      scopes.add(comment);
+    }
+
+    final raw = root['raw'];
+    if (raw is Map<String, dynamic>) {
+      scopes.add(raw);
+    }
+
+    for (final scope in scopes) {
+      final candidates = [
+        scope['id'],
+        scope['_id'],
+        scope['commentId'],
+        scope['uuid'],
+      ];
+      for (final candidate in candidates) {
+        if (candidate is String && candidate.isNotEmpty) {
+          return candidate;
+        }
+        if (candidate is int) {
+          return candidate.toString();
+        }
+      }
+    }
+
+    return null;
+  }
+
+  int? _extractLikeCountFromResponse(dynamic response) {
+    final root = _normalizeToMap(response);
+    if (root == null) {
+      return null;
+    }
+
+    final scopes = <Map<String, dynamic>>[];
+    scopes.add(root);
+
+    final data = root['data'];
+    if (data is Map<String, dynamic>) {
+      scopes.add(data);
+    }
+
+    final meta = root['meta'] ?? root['metadata'];
+    if (meta is Map<String, dynamic>) {
+      scopes.add(meta);
+    }
+
+    final payload = root['payload'];
+    if (payload is Map<String, dynamic>) {
+      scopes.add(payload);
+    }
+
+    final raw = root['raw'];
+    if (raw is Map<String, dynamic>) {
+      scopes.add(raw);
+    }
+
+    for (final scope in scopes) {
+      final candidates = [
+        scope['likeCount'],
+        scope['likes'],
+        scope['likesCount'],
+        scope['totalLikes'],
+      ];
+      for (final candidate in candidates) {
+        final parsed = _tryParseInt(candidate);
+        if (parsed != null) {
+          return parsed;
+        }
+      }
+    }
+
+    return null;
+  }
+
   Future<void> initialize({String? overrideBaseUrl}) async {
     await _baseUrlResolver.initialize(overrideBaseUrl: overrideBaseUrl);
   }
@@ -309,6 +502,19 @@ class ApiService {
         : summary;
 
     _applyRelationshipMutations(userId, normalizedSummary);
+    if (normalizedSummary.status == RelationshipStatus.pendingOutgoing &&
+        normalizedSummary.pendingRequestId != null) {
+      unawaited(
+        _enqueueNotification(
+          toUserId: userId,
+          type: 'friend_request',
+          payload: <String, dynamic>{
+            'requestId': normalizedSummary.pendingRequestId,
+            'status': normalizedSummary.status.name,
+          },
+        ),
+      );
+    }
     return normalizedSummary;
   }
 
@@ -373,6 +579,16 @@ class ApiService {
       fallbackStatus: RelationshipStatus.friends,
     );
     _applyRelationshipMutations(resolvedTargetUserId, summary);
+    unawaited(
+      _enqueueNotification(
+        toUserId: resolvedTargetUserId,
+        type: 'friend_request_accepted',
+        payload: <String, dynamic>{
+          'requestId': requestId,
+          'status': summary.status.name,
+        },
+      ),
+    );
     return summary;
   }
 
@@ -398,6 +614,16 @@ class ApiService {
       fallbackStatus: RelationshipStatus.none,
     );
     _applyRelationshipMutations(resolvedTargetUserId, summary);
+    unawaited(
+      _enqueueNotification(
+        toUserId: resolvedTargetUserId,
+        type: 'friend_request_declined',
+        payload: <String, dynamic>{
+          'requestId': requestId,
+          'status': summary.status.name,
+        },
+      ),
+    );
     return summary;
   }
 
@@ -491,6 +717,26 @@ class ApiService {
     await batch.commit();
   }
 
+  /// Permanently delete a notification owned by the current user.
+  Future<void> deleteNotification(String notificationId) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) throw Exception('Not authenticated');
+
+    final docRef = _notificationsCollection.doc(notificationId);
+    final snapshot = await docRef.get();
+    final data = snapshot.data();
+
+    if (!snapshot.exists || data == null) {
+      return;
+    }
+
+    if ((data['toUserId'] as String?) != uid) {
+      throw Exception('Not authorized to delete this notification');
+    }
+
+    await docRef.delete();
+  }
+
   /// Fetch incoming friend requests for the authenticated user.
   ///
   /// Assumes the backend exposes an endpoint that returns a list of pending
@@ -520,6 +766,40 @@ class ApiService {
           items.map((e) => e is Map<String, dynamic> ? e : <String, dynamic>{}),
         );
       }
+    }
+
+    return <Map<String, dynamic>>[];
+  }
+
+  /// Fetch friends list for a specific user.
+  ///
+  /// Returns a list of friends with their basic information.
+  Future<List<Map<String, dynamic>>> getFriends(String userId) async {
+    final result = await _authorizedRequest(
+      _HttpMethod.get,
+      '/friend/friends/$userId',
+      acceptedStatus: const [200],
+    );
+
+    final data = result.json;
+
+    // Backend returns { friends: [...], count: number }
+    if (data is Map<String, dynamic>) {
+      final friends = data['friends'];
+      if (friends is List) {
+        return List<Map<String, dynamic>>.from(
+          friends.map(
+            (e) => e is Map<String, dynamic> ? e : <String, dynamic>{},
+          ),
+        );
+      }
+    }
+
+    // Fallback: if data is directly a list
+    if (data is List) {
+      return List<Map<String, dynamic>>.from(
+        data.map((e) => e is Map<String, dynamic> ? e : <String, dynamic>{}),
+      );
     }
 
     return <Map<String, dynamic>>[];
@@ -587,6 +867,79 @@ class ApiService {
     }
   }
 
+  Future<void> updateFCMToken(String token) async {
+    try {
+      await _authorizedRequest(
+        _HttpMethod.put,
+        '/users/fcm-token',
+        acceptedStatus: const [200, 201],
+        jsonBody: {'fcmToken': token},
+        parseJson: false,
+      );
+      _log('FCM token updated successfully');
+    } catch (e) {
+      _log('Error updating FCM token: $e');
+      rethrow;
+    }
+  }
+
+  /// Send a chat message through backend API to trigger push notifications
+  Future<Map<String, dynamic>> sendChatMessage({
+    required String chatId,
+    required String recipientUserId,
+    required String message,
+  }) async {
+    try {
+      final result = await _authorizedRequest(
+        _HttpMethod.post,
+        '/chat/messages',
+        acceptedStatus: const [200, 201],
+        jsonBody: {
+          'chatId': chatId,
+          'recipientUserId': recipientUserId,
+          'message': message,
+        },
+        parseJson: true,
+      );
+      _log('Chat message sent successfully');
+      return result.json ?? {};
+    } catch (e) {
+      _log('Error sending chat message: $e');
+      rethrow;
+    }
+  }
+
+  /// Search for users by name or username
+  Future<List<Map<String, dynamic>>> searchUsers(String query) async {
+    try {
+      final result = await _authorizedRequest(
+        _HttpMethod.get,
+        '/search/users',
+        queryParameters: {'query': query.trim()},
+        acceptedStatus: const [200],
+        parseJson: true,
+      );
+
+      final data = result.json;
+      if (data == null) return [];
+
+      // Handle different response formats
+      if (data is List) {
+        return data.cast<Map<String, dynamic>>();
+      } else if (data is Map && data['users'] != null) {
+        final users = data['users'];
+        if (users is List) {
+          return users.cast<Map<String, dynamic>>();
+        }
+      }
+
+      return [];
+    } catch (e) {
+      _log('Error searching users: $e');
+      rethrow;
+    }
+  }
+
   Future<void> deletePost(String postId) async {
     final result = await _authorizedRequest(
       _HttpMethod.delete,
@@ -598,7 +951,10 @@ class ApiService {
     unawaited(_invalidateCacheKey(_postsCacheKey));
   }
 
-  Future<Map<String, dynamic>> likePost(String postId) async {
+  Future<Map<String, dynamic>> likePost(
+    String postId, {
+    String? postOwnerId,
+  }) async {
     final result = await _authorizedRequest(
       _HttpMethod.post,
       '/posts/$postId/like',
@@ -606,6 +962,13 @@ class ApiService {
     );
 
     final data = result.json;
+    unawaited(
+      _maybeNotifyPostLike(
+        postId: postId,
+        postOwnerId: postOwnerId,
+        response: data,
+      ),
+    );
     if (data is Map<String, dynamic>) {
       unawaited(_invalidateCacheKey(_postsCacheKey));
       return data;
@@ -693,7 +1056,11 @@ class ApiService {
     return normalized;
   }
 
-  Future<Map<String, dynamic>> addComment(String postId, String text) async {
+  Future<Map<String, dynamic>> addComment(
+    String postId,
+    String text, {
+    String? postOwnerId,
+  }) async {
     final result = await _authorizedRequest(
       _HttpMethod.post,
       '/posts/$postId/comments',
@@ -702,6 +1069,14 @@ class ApiService {
     );
 
     final data = result.json;
+    unawaited(
+      _maybeNotifyPostComment(
+        postId: postId,
+        postOwnerId: postOwnerId,
+        response: data,
+        commentText: text,
+      ),
+    );
     if (data is Map<String, dynamic>) {
       unawaited(_invalidateCacheKey(_commentsCacheKey(postId)));
       return data;

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -12,12 +14,17 @@ class NotificationsPage extends StatefulWidget {
   State<NotificationsPage> createState() => _NotificationsPageState();
 }
 
+enum _FriendRequestResolution { accepted, declined }
+
 class _NotificationsPageState extends State<NotificationsPage> {
   final _apiService = ApiService();
   List<Map<String, dynamic>> _notifications = const [];
   String? _errorMessage;
   bool _isLoading = false;
   final Set<String> _actionInProgress = <String>{};
+  final Map<String, _FriendRequestResolution> _friendRequestResolutions =
+      <String, _FriendRequestResolution>{};
+  final Set<String> _resolutionFetchInProgress = <String>{};
 
   @override
   void initState() {
@@ -35,11 +42,19 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
     try {
       final notifications = await _apiService.getNotifications();
+      final idSet = notifications
+          .map((item) => item['id'])
+          .whereType<String>()
+          .toSet();
       if (!mounted) return;
       setState(() {
+        _friendRequestResolutions.removeWhere((key, _) => !idSet.contains(key));
         _notifications = notifications;
         _isLoading = false;
       });
+      if (notifications.isNotEmpty) {
+        unawaited(_prefetchFriendRequestResolutions(notifications));
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -51,6 +66,72 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
   Future<void> _refreshNotifications() async {
     await _loadNotifications(initial: true);
+  }
+
+  Future<void> _prefetchFriendRequestResolutions(
+    List<Map<String, dynamic>> notifications,
+  ) async {
+    final futures = <Future<void>>[];
+    for (final notification in notifications) {
+      final type = _readString(notification, 'type')?.toLowerCase();
+      final notificationId = _readString(notification, 'id');
+      final fromUserId = _readString(notification, 'fromUserId');
+      if (type == 'friend_request' &&
+          notificationId != null &&
+          fromUserId != null &&
+          !_friendRequestResolutions.containsKey(notificationId) &&
+          !_resolutionFetchInProgress.contains(notificationId)) {
+        _resolutionFetchInProgress.add(notificationId);
+        futures.add(_fetchFriendRequestResolution(notificationId, fromUserId));
+      }
+    }
+
+    if (futures.isEmpty) {
+      return;
+    }
+
+    await Future.wait(futures);
+  }
+
+  Future<void> _fetchFriendRequestResolution(
+    String notificationId,
+    String userId,
+  ) async {
+    try {
+      final summary = await _apiService.getRelationshipSummary(
+        userId,
+        forceRefresh: true,
+      );
+      final resolution = _mapRelationshipStatusToResolution(summary.status);
+      if (!mounted) return;
+      setState(() {
+        if (resolution == null) {
+          _friendRequestResolutions.remove(notificationId);
+        } else {
+          _friendRequestResolutions[notificationId] = resolution;
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _friendRequestResolutions.remove(notificationId);
+      });
+    } finally {
+      _resolutionFetchInProgress.remove(notificationId);
+    }
+  }
+
+  _FriendRequestResolution? _mapRelationshipStatusToResolution(
+    RelationshipStatus status,
+  ) {
+    switch (status) {
+      case RelationshipStatus.friends:
+        return _FriendRequestResolution.accepted;
+      case RelationshipStatus.none:
+        return _FriendRequestResolution.declined;
+      default:
+        return null;
+    }
   }
 
   Future<void> _handleAcceptRequest(Map<String, dynamic> notification) async {
@@ -72,19 +153,17 @@ class _NotificationsPageState extends State<NotificationsPage> {
       await _apiService.acceptFriendRequest(requestId);
       await _apiService.markNotificationAsRead(notificationId);
       if (!mounted) return;
-      setState(() {
-        _notifications = _notifications
-            .where((item) => item['id'] != notificationId)
-            .toList(growable: false);
-      });
+      _removeNotificationLocally(notificationId);
       _showSnackBar('Friend request accepted.');
     } catch (e) {
       _showSnackBar('Failed to accept friend request: $e');
     } finally {
       if (mounted) {
-        setState(() {
-          _actionInProgress.remove(notificationId);
-        });
+        if (_actionInProgress.contains(notificationId)) {
+          setState(() {
+            _actionInProgress.remove(notificationId);
+          });
+        }
       }
     }
   }
@@ -108,19 +187,17 @@ class _NotificationsPageState extends State<NotificationsPage> {
       await _apiService.declineFriendRequest(requestId);
       await _apiService.markNotificationAsRead(notificationId);
       if (!mounted) return;
-      setState(() {
-        _notifications = _notifications
-            .where((item) => item['id'] != notificationId)
-            .toList(growable: false);
-      });
+      _removeNotificationLocally(notificationId);
       _showSnackBar('Friend request declined.');
     } catch (e) {
       _showSnackBar('Failed to decline request: $e');
     } finally {
       if (mounted) {
-        setState(() {
-          _actionInProgress.remove(notificationId);
-        });
+        if (_actionInProgress.contains(notificationId)) {
+          setState(() {
+            _actionInProgress.remove(notificationId);
+          });
+        }
       }
     }
   }
@@ -174,6 +251,49 @@ class _NotificationsPageState extends State<NotificationsPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _removeNotificationLocally(String notificationId) {
+    setState(() {
+      _notifications = _notifications
+          .where((item) => item['id'] != notificationId)
+          .toList(growable: false);
+      _friendRequestResolutions.remove(notificationId);
+      _resolutionFetchInProgress.remove(notificationId);
+      _actionInProgress.remove(notificationId);
+    });
+  }
+
+  Future<bool?> _confirmDeleteNotification(String notificationId) async {
+    try {
+      await _apiService.deleteNotification(notificationId);
+      return true;
+    } catch (e) {
+      _showSnackBar('Failed to delete notification: $e');
+      return false;
+    }
+  }
+
+  Widget _buildDeleteBackground() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.redAccent,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      alignment: Alignment.centerRight,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          Icon(Icons.delete_outline, color: Colors.white),
+          SizedBox(width: 8),
+          Text(
+            'Delete',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -280,7 +400,24 @@ class _NotificationsPageState extends State<NotificationsPage> {
       itemCount: _notifications.length,
       itemBuilder: (context, index) {
         final notification = _notifications[index];
-        return _buildNotificationCard(notification);
+        final notificationId = _readString(notification, 'id');
+        if (notificationId == null) {
+          return _buildNotificationCard(notification);
+        }
+
+        return Dismissible(
+          key: ValueKey(notificationId),
+          direction: DismissDirection.endToStart,
+          background: Container(),
+          secondaryBackground: _buildDeleteBackground(),
+          confirmDismiss: (_) => _confirmDeleteNotification(notificationId),
+          onDismissed: (_) {
+            if (!mounted) return;
+            _removeNotificationLocally(notificationId);
+            _showSnackBar('Notification deleted.');
+          },
+          child: _buildNotificationCard(notification),
+        );
       },
     );
   }
@@ -294,9 +431,11 @@ class _NotificationsPageState extends State<NotificationsPage> {
         _readString(notification, 'fromUserName') ??
         _readNestedString(notification, ['fromUser', 'username']) ??
         'Someone';
+    final payload = _readMap(notification, 'payload');
     final message =
         notification['message'] as String? ??
-        _defaultMessage(type: type, fromUserName: fromName);
+        _defaultMessage(type: type, fromUserName: fromName, payload: payload);
+    final secondaryText = _secondaryDetail(type: type, payload: payload);
 
     final avatarUrl =
         _readString(notification, 'fromUserAvatar') ??
@@ -332,6 +471,17 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                     : FontWeight.w600,
                               ),
                         ),
+                        if (secondaryText != null) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            secondaryText,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(
+                                  color: Colors.grey[700],
+                                  fontStyle: FontStyle.italic,
+                                ),
+                          ),
+                        ],
                         if (createdAt != null) ...[
                           const SizedBox(height: 4),
                           Text(
@@ -367,10 +517,14 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
   Widget _buildAvatar(String? url, String name, Color accentColor) {
     if (url != null && url.isNotEmpty) {
+      final lower = url.toLowerCase();
+      final isAbsolute =
+          lower.startsWith('http://') || lower.startsWith('https://');
+      final resolvedUrl = isAbsolute ? url : ApiService().getFullImageUrl(url);
       return ClipOval(
         child: CachedNetworkImage(
           cacheManager: AppCacheManagers.imageCache,
-          imageUrl: ApiService().getFullImageUrl(url),
+          imageUrl: resolvedUrl,
           width: 44,
           height: 44,
           fit: BoxFit.cover,
@@ -417,6 +571,27 @@ class _NotificationsPageState extends State<NotificationsPage> {
     final isProcessing =
         notificationId != null && _actionInProgress.contains(notificationId);
 
+    final resolution = notificationId == null
+        ? null
+        : _friendRequestResolutions[notificationId];
+
+    if (resolution == _FriendRequestResolution.accepted) {
+      return _buildFriendRequestResolvedRow(notification, accepted: true);
+    }
+
+    if (resolution == _FriendRequestResolution.declined) {
+      return _buildFriendRequestResolvedRow(notification, accepted: false);
+    }
+
+    final fromUserId = _readString(notification, 'fromUserId');
+    if (notificationId != null &&
+        fromUserId != null &&
+        !_friendRequestResolutions.containsKey(notificationId) &&
+        !_resolutionFetchInProgress.contains(notificationId)) {
+      _resolutionFetchInProgress.add(notificationId);
+      unawaited(_fetchFriendRequestResolution(notificationId, fromUserId));
+    }
+
     return Row(
       children: [
         Expanded(
@@ -437,6 +612,39 @@ class _NotificationsPageState extends State<NotificationsPage> {
             icon: const Icon(Icons.close),
             label: const Text('Decline'),
           ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFriendRequestResolvedRow(
+    Map<String, dynamic> notification, {
+    required bool accepted,
+  }) {
+    final alreadyRead = (notification['isRead'] as bool?) == true;
+    final color = accepted ? Colors.green : Colors.orange;
+    final icon = accepted ? Icons.check_circle : Icons.cancel_outlined;
+    final label = accepted
+        ? 'Friend request already accepted'
+        : 'Friend request already handled';
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Icon(icon, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        TextButton(
+          onPressed: alreadyRead ? null : () => _handleMarkAsRead(notification),
+          child: Text(alreadyRead ? 'Read' : 'Mark as read'),
         ),
       ],
     );
@@ -479,15 +687,68 @@ class _NotificationsPageState extends State<NotificationsPage> {
     return current is String && current.isNotEmpty ? current : null;
   }
 
-  String _defaultMessage({required String type, required String fromUserName}) {
+  Map<String, dynamic>? _readMap(Map<String, dynamic> map, String key) {
+    final value = map[key];
+    if (value is Map<String, dynamic>) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map((key, val) => MapEntry('$key', val));
+    }
+    return null;
+  }
+
+  String? _secondaryDetail({
+    required String type,
+    Map<String, dynamic>? payload,
+  }) {
+    switch (type) {
+      case 'post_comment':
+      case 'comment':
+        final preview = _readPayloadString(payload, 'commentPreview');
+        if (preview != null && preview.isNotEmpty) {
+          return '"$preview"';
+        }
+        return null;
+      case 'message':
+        final preview =
+            _readPayloadString(payload, 'messagePreview') ??
+            _readPayloadString(payload, 'textPreview');
+        if (preview != null && preview.isNotEmpty) {
+          return preview;
+        }
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  String? _readPayloadString(Map<String, dynamic>? payload, String key) {
+    final value = payload?[key];
+    if (value is String && value.trim().isNotEmpty) {
+      return value.trim();
+    }
+    return null;
+  }
+
+  String _defaultMessage({
+    required String type,
+    required String fromUserName,
+    Map<String, dynamic>? payload,
+  }) {
     switch (type) {
       case 'friend_request':
         return '$fromUserName sent you a friend request';
       case 'friend_accept':
+      case 'friend_request_accepted':
         return '$fromUserName accepted your friend request';
+      case 'message':
+        return '$fromUserName sent you a message';
       case 'like':
+      case 'post_like':
         return '$fromUserName liked your post';
       case 'comment':
+      case 'post_comment':
         return '$fromUserName commented on your post';
       default:
         return '$fromUserName sent a notification';

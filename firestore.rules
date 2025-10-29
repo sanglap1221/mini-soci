@@ -1,22 +1,196 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /notifications/{notificationId} {
-      allow read: if request.auth != null &&
-        (request.auth.uid == resource.data.toUserId ||
-         request.auth.uid == resource.data.fromUserId);
 
-      allow create: if request.auth != null &&
+    // Add this rule for the users collection
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /chats/{chatId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+
+      function isParticipant() {
+        return isSignedIn() &&
+          request.resource.data.participants is list &&
+          request.resource.data.participants.hasAny([request.auth.uid]);
+      }
+
+      function isExistingParticipant() {
+        return isSignedIn() &&
+          resource.data.participants is list &&
+          resource.data.participants.hasAny([request.auth.uid]);
+      }
+
+      // Allow reading if user is in participants array
+      allow read: if isSignedIn() && (
+        !exists(/databases/$(database)/documents/chats/$(chatId)) ||
+        resource.data.participants.hasAny([request.auth.uid])
+      );
+
+      // Allow creating if user is in participants array
+      allow create: if isParticipant();
+
+      // Allow updating if user is already a participant
+      allow update: if isExistingParticipant();
+
+      // Allow deleting if user is a participant
+      allow delete: if isExistingParticipant();
+
+      match /messages/{messageId} {
+        // Allow reading messages if user is a participant of the parent chat
+        allow read: if isSignedIn();
+
+        // Allow creating messages if user is authenticated and is the sender
+        allow create: if isSignedIn() &&
+          request.resource.data.senderId == request.auth.uid;
+
+        allow update, delete: if false;
+      }
+    }
+
+    // Rules for notifications collection
+    match /notifications/{notificationId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+
+      function isRecipient() {
+        return isSignedIn() && request.auth.uid == resource.data.toUserId;
+      }
+
+      function isCreator() {
+        return isSignedIn() && request.auth.uid == resource.data.fromUserId;
+      }
+
+      allow get, list: if isRecipient() || isCreator();
+
+      allow create: if isSignedIn() &&
+        request.resource.data.keys().hasOnly([
+          'fromUserId',
+          'toUserId',
+          'type',
+          'createdAt',
+          'isRead',
+          'readAt',
+          'payload',
+          'fromUserName',
+          'fromUserAvatar',
+          'message',
+          'status'
+        ]) &&
+        request.resource.data.keys().hasAll([
+          'fromUserId',
+          'toUserId',
+          'type',
+          'createdAt',
+          'isRead'
+        ]) &&
         request.resource.data.fromUserId == request.auth.uid &&
         request.resource.data.toUserId is string &&
-        request.resource.data.type is string;
+        request.resource.data.toUserId != request.auth.uid &&
+        request.resource.data.type in [
+          'friend_request',
+          'friend_request_accepted',
+          'friend_request_declined',
+          'message',
+          'post_like',
+          'post_comment'
+        ] &&
+        (request.resource.data.createdAt is timestamp ||
+          request.resource.data.createdAt == request.time) &&
+        request.resource.data.isRead == false &&
+        (!request.resource.data.keys().hasAny(['readAt']) ||
+          request.resource.data.readAt == null) &&
+        (!request.resource.data.keys().hasAny(['payload']) ||
+          request.resource.data.payload is map) &&
+        (!request.resource.data.keys().hasAny(['fromUserName']) ||
+          request.resource.data.fromUserName is string) &&
+        (!request.resource.data.keys().hasAny(['fromUserAvatar']) ||
+          request.resource.data.fromUserAvatar is string) &&
+        (!request.resource.data.keys().hasAny(['message']) ||
+          request.resource.data.message is string) &&
+        (!request.resource.data.keys().hasAny(['status']) ||
+          request.resource.data.status is string);
 
-      allow update: if request.auth != null &&
-        resource.data.toUserId == request.auth.uid &&
-        request.resource.data.keys().hasOnly(['isRead', 'readAt']) &&
-        request.resource.data.isRead == true;
+      allow update: if isRecipient() &&
+        request.resource.data.keys().hasOnly([
+          'fromUserId',
+          'toUserId',
+          'type',
+          'createdAt',
+          'isRead',
+          'readAt',
+          'payload',
+          'fromUserName',
+          'fromUserAvatar',
+          'message',
+          'status'
+        ]) &&
+        request.resource.data.fromUserId == resource.data.fromUserId &&
+        request.resource.data.toUserId == resource.data.toUserId &&
+        request.resource.data.type == resource.data.type &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.payload == resource.data.payload &&
+        request.resource.data.fromUserName == resource.data.fromUserName &&
+        request.resource.data.fromUserAvatar == resource.data.fromUserAvatar &&
+        request.resource.data.message == resource.data.message &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.isRead == true &&
+        (request.resource.data.readAt is timestamp ||
+          request.resource.data.readAt == request.time);
 
-      allow delete: if false;
+      allow delete: if isRecipient();
+    }
+
+    // Calls collection - for WebRTC audio/video calling
+    match /calls/{callId} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+
+      function isCallParticipant() {
+        return isSignedIn() && (
+          resource.data.callerId == request.auth.uid || 
+          resource.data.calleeId == request.auth.uid
+        );
+      }
+
+      function isCallCreator() {
+        return isSignedIn() && 
+          request.resource.data.callerId == request.auth.uid;
+      }
+
+      // Allow reading call documents if user is caller or callee
+      allow read: if isSignedIn() && (
+        !exists(/databases/$(database)/documents/calls/$(callId)) ||
+        isCallParticipant()
+      );
+
+      // Allow creating calls if user is the caller
+      allow create: if isCallCreator() &&
+        request.resource.data.keys().hasAll([
+          'callId',
+          'callerId',
+          'calleeId',
+          'status',
+          'timestamp',
+          'isVideoCall'
+        ]) &&
+        request.resource.data.callerId == request.auth.uid &&
+        request.resource.data.calleeId is string &&
+        request.resource.data.calleeId != request.auth.uid &&
+        request.resource.data.status == 'ringing' &&
+        request.resource.data.isVideoCall is bool;
+
+      // Allow updating calls if user is participant (for accepting, ending, rejecting, or setting offer/answer)
+      allow update: if isCallParticipant();
+
+      // Allow deleting calls if user is participant
+      allow delete: if isCallParticipant();
     }
   }
 }
