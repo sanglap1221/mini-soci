@@ -18,6 +18,8 @@ class CallService {
     required bool isVideoCall,
   }) async {
     final callId = _uuid.v4();
+    // Sort participants to ensure consistent order for Firestore rules and queries.
+    final participants = [callerId, calleeId]..sort();
 
     await _firestore.collection('calls').doc(callId).set({
       'callId': callId,
@@ -26,7 +28,7 @@ class CallService {
       'status': 'ringing',
       'isVideoCall': isVideoCall,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'participants': [callerId, calleeId],
+      'participants': participants,
       'offer': null,
       'answer': null,
       'callerCandidates': [],
@@ -58,22 +60,12 @@ class CallService {
     await _firestore.collection('calls').doc(callId).update({
       'status': 'ended',
     });
-
-    // Delete the call document after a delay
-    Future.delayed(const Duration(seconds: 5), () {
-      _firestore.collection('calls').doc(callId).delete();
-    });
   }
 
   /// Reject the call
   Future<void> rejectCall(String callId) async {
     await _firestore.collection('calls').doc(callId).update({
       'status': 'rejected',
-    });
-
-    // Delete the call document after a delay
-    Future.delayed(const Duration(seconds: 2), () {
-      _firestore.collection('calls').doc(callId).delete();
     });
   }
 
@@ -151,23 +143,13 @@ class CallService {
   Future<void> clearCallHistory(String userId) async {
     final WriteBatch batch = _firestore.batch();
 
-    // Query for calls where the user was the caller
-    final callerQuery = _firestore
+    // Use a single query on the 'participants' array to find all calls for the user.
+    final query = _firestore
         .collection('calls')
-        .where('callerId', isEqualTo: userId);
+        .where('participants', arrayContains: userId);
 
-    // Query for calls where the user was the callee
-    final calleeQuery = _firestore
-        .collection('calls')
-        .where('calleeId', isEqualTo: userId);
-
-    final callerSnapshot = await callerQuery.get();
-    for (final doc in callerSnapshot.docs) {
-      batch.delete(doc.reference);
-    }
-
-    final calleeSnapshot = await calleeQuery.get();
-    for (final doc in calleeSnapshot.docs) {
+    final snapshot = await query.get();
+    for (final doc in snapshot.docs) {
       batch.delete(doc.reference);
     }
 

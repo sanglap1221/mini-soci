@@ -40,6 +40,7 @@ class _CallScreenState extends State<CallScreen> {
   bool _isOnHold = false;
   bool _isInitialized = false;
   final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _isClosing = false; // Flag to prevent multiple pops
   final ApiService _apiService = ApiService();
   Timer? _callTimer;
   Duration _callDuration = Duration.zero;
@@ -109,11 +110,7 @@ class _CallScreenState extends State<CallScreen> {
       },
       onCallEnded: () {
         if (mounted) {
-          _stopRingingSound();
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Call ended')));
-          Navigator.of(context).pop();
+          _endCall(showSnackbar: true);
         }
       },
     );
@@ -164,12 +161,20 @@ class _CallScreenState extends State<CallScreen> {
     _webrtcHelper.switchCamera();
   }
 
-  Future<void> _endCall() async {
+  Future<void> _endCall({bool showSnackbar = false}) async {
+    if (_isClosing) return; // Prevent re-entry
+    _isClosing = true;
+
     if (_isInitialized) {
       _stopRingingSound();
       await _webrtcHelper.endCall();
     }
     if (mounted) {
+      if (showSnackbar) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Call ended')));
+      }
       Navigator.pop(context);
     }
   }
@@ -299,7 +304,7 @@ class _CallScreenState extends State<CallScreen> {
                   ),
                 IconButton(
                   icon: const Icon(Icons.call_end, color: Colors.red),
-                  onPressed: _endCall,
+                  onPressed: () => _endCall(showSnackbar: false),
                 ),
               ],
             ),
