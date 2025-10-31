@@ -2,12 +2,17 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Add this rule for the users collection
+    // ======================
+    // USERS
+    // ======================
     match /users/{userId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
+    // ======================
+    // CHATS
+    // ======================
     match /chats/{chatId} {
       function isSignedIn() {
         return request.auth != null;
@@ -25,34 +30,26 @@ service cloud.firestore {
           resource.data.participants.hasAny([request.auth.uid]);
       }
 
-      // Allow reading if user is in participants array
       allow read: if isSignedIn() && (
         !exists(/databases/$(database)/documents/chats/$(chatId)) ||
         resource.data.participants.hasAny([request.auth.uid])
       );
 
-      // Allow creating if user is in participants array
       allow create: if isParticipant();
-
-      // Allow updating if user is already a participant
       allow update: if isExistingParticipant();
-
-      // Allow deleting if user is a participant
       allow delete: if isExistingParticipant();
 
       match /messages/{messageId} {
-        // Allow reading messages if user is a participant of the parent chat
         allow read: if isSignedIn();
-
-        // Allow creating messages if user is authenticated and is the sender
         allow create: if isSignedIn() &&
           request.resource.data.senderId == request.auth.uid;
-
         allow update, delete: if false;
       }
     }
 
-    // Rules for notifications collection
+    // ======================
+    // NOTIFICATIONS
+    // ======================
     match /notifications/{notificationId} {
       function isSignedIn() {
         return request.auth != null;
@@ -70,35 +67,19 @@ service cloud.firestore {
 
       allow create: if isSignedIn() &&
         request.resource.data.keys().hasOnly([
-          'fromUserId',
-          'toUserId',
-          'type',
-          'createdAt',
-          'isRead',
-          'readAt',
-          'payload',
-          'fromUserName',
-          'fromUserAvatar',
-          'message',
-          'status'
+          'fromUserId', 'toUserId', 'type', 'createdAt',
+          'isRead', 'readAt', 'payload', 'fromUserName',
+          'fromUserAvatar', 'message', 'status'
         ]) &&
         request.resource.data.keys().hasAll([
-          'fromUserId',
-          'toUserId',
-          'type',
-          'createdAt',
-          'isRead'
+          'fromUserId', 'toUserId', 'type', 'createdAt', 'isRead'
         ]) &&
         request.resource.data.fromUserId == request.auth.uid &&
         request.resource.data.toUserId is string &&
         request.resource.data.toUserId != request.auth.uid &&
         request.resource.data.type in [
-          'friend_request',
-          'friend_request_accepted',
-          'friend_request_declined',
-          'message',
-          'post_like',
-          'post_comment'
+          'friend_request', 'friend_request_accepted', 'friend_request_declined',
+          'message', 'post_like', 'post_comment'
         ] &&
         (request.resource.data.createdAt is timestamp ||
           request.resource.data.createdAt == request.time) &&
@@ -117,28 +98,6 @@ service cloud.firestore {
           request.resource.data.status is string);
 
       allow update: if isRecipient() &&
-        request.resource.data.keys().hasOnly([
-          'fromUserId',
-          'toUserId',
-          'type',
-          'createdAt',
-          'isRead',
-          'readAt',
-          'payload',
-          'fromUserName',
-          'fromUserAvatar',
-          'message',
-          'status'
-        ]) &&
-        request.resource.data.fromUserId == resource.data.fromUserId &&
-        request.resource.data.toUserId == resource.data.toUserId &&
-        request.resource.data.type == resource.data.type &&
-        request.resource.data.createdAt == resource.data.createdAt &&
-        request.resource.data.payload == resource.data.payload &&
-        request.resource.data.fromUserName == resource.data.fromUserName &&
-        request.resource.data.fromUserAvatar == resource.data.fromUserAvatar &&
-        request.resource.data.message == resource.data.message &&
-        request.resource.data.status == resource.data.status &&
         request.resource.data.isRead == true &&
         (request.resource.data.readAt is timestamp ||
           request.resource.data.readAt == request.time);
@@ -146,31 +105,47 @@ service cloud.firestore {
       allow delete: if isRecipient();
     }
 
-    // Calls collection - for WebRTC audio/video calling
+      // ======================
+    // CALLS (WebRTC Audio/Video)
+    // ======================
     match /calls/{callId} {
       function isSignedIn() {
         return request.auth != null;
       }
 
+      // ✅ Checks caller, callee, and participants array
       function isCallParticipant() {
         return isSignedIn() && (
           resource.data.callerId == request.auth.uid || 
-          resource.data.calleeId == request.auth.uid
+          resource.data.calleeId == request.auth.uid ||
+          (resource.data.participants is list &&
+           resource.data.participants.hasAny([request.auth.uid]))
         );
       }
 
+      // ✅ Used during creation (request.resource instead of resource)
+      function isCreatingParticipant() {
+        return isSignedIn() &&
+          (request.resource.data.participants is list &&
+           request.resource.data.participants.hasAny([request.auth.uid]));
+      }
+
+      // ✅ Only the caller can create a new call document
       function isCallCreator() {
-        return isSignedIn() && 
+        return isSignedIn() &&
           request.resource.data.callerId == request.auth.uid;
       }
 
-      // Allow reading call documents if user is caller or callee
-      allow read: if isSignedIn() && (
-        !exists(/databases/$(database)/documents/calls/$(callId)) ||
-        isCallParticipant()
+      // ✅ Allow reading calls if the user is a participant AND the status is valid for the context.
+      // This rule now mirrors the queries used in the app for both active calls and call history.
+      allow read: if isSignedIn() && resource.data.participants.hasAny([request.auth.uid]) && (
+          // Allow reading active/ringing calls for the CallScreen and listeners.
+          resource.data.status in ['ringing', 'accepted', 'active'] ||
+          // Allow reading completed calls for the CallHistoryPage.
+          resource.data.status in ['ended', 'rejected', 'cancelled']
       );
 
-      // Allow creating calls if user is the caller
+      // ✅ Allow creating calls if the caller is authenticated and creates with valid structure
       allow create: if isCallCreator() &&
         request.resource.data.keys().hasAll([
           'callId',
@@ -178,19 +153,28 @@ service cloud.firestore {
           'calleeId',
           'status',
           'timestamp',
-          'isVideoCall'
+          'isVideoCall',
+          'participants',
+          'offer',
+          'answer',
+          'callerCandidates', 'calleeCandidates' // Allow all fields on create
         ]) &&
         request.resource.data.callerId == request.auth.uid &&
         request.resource.data.calleeId is string &&
         request.resource.data.calleeId != request.auth.uid &&
-        request.resource.data.status == 'ringing' &&
-        request.resource.data.isVideoCall is bool;
+        request.resource.data.status in ['ringing', 'active', 'ended', 'rejected', 'cancelled'] && // 🟢 Added missing statuses
+        request.resource.data.isVideoCall is bool &&
+        request.resource.data.participants == [
+          request.resource.data.callerId,
+          request.resource.data.calleeId
+        ];
 
-      // Allow updating calls if user is participant (for accepting, ending, rejecting, or setting offer/answer)
+      // ✅ Allow updates from anyone in the call (accept, reject, end, etc.)
       allow update: if isCallParticipant();
 
-      // Allow deleting calls if user is participant
+      // ✅ Allow deletes (optional cleanup)
       allow delete: if isCallParticipant();
     }
+
   }
 }
