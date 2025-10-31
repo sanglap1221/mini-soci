@@ -3,6 +3,7 @@ import 'package:flutter/rendering.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'chat_list_page.dart';
 import 'addpostpage.dart';
+import 'call_history_page.dart';
 import 'feed_page.dart';
 import 'profile_page.dart';
 import 'reels_page.dart';
@@ -43,8 +44,10 @@ class _HomepageState extends State<Homepage> {
       case 1:
         return ReelsPage(refreshTrigger: _feedRefreshToken);
       case 2:
-        return const ChatListPage();
+        return const CallHistoryPage();
       case 3:
+        return const ChatListPage();
+      case 4:
         return ProfilePage();
       default:
         return FeedPage(refreshTrigger: _feedRefreshToken);
@@ -127,6 +130,10 @@ class _HomepageState extends State<Homepage> {
                       BottomNavigationBarItem(
                         icon: Icon(Icons.smart_display),
                         label: 'Reels',
+                      ),
+                      BottomNavigationBarItem(
+                        icon: Icon(Icons.call),
+                        label: 'Calls',
                       ),
                       BottomNavigationBarItem(
                         icon: Icon(Icons.chat),

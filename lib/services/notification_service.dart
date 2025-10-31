@@ -159,9 +159,21 @@ class NotificationService {
         enableVibration: true,
       );
 
+      // Channel for incoming calls
+      const callChannel = AndroidNotificationChannel(
+        'incoming_calls',
+        'Incoming Calls',
+        description: 'Notifications for incoming calls',
+        importance: Importance.max,
+        playSound: true,
+        enableVibration: true,
+        showBadge: true,
+      );
+
       await plugin?.createNotificationChannel(chatChannel);
       await plugin?.createNotificationChannel(socialChannel);
       await plugin?.createNotificationChannel(friendRequestChannel);
+      await plugin?.createNotificationChannel(callChannel);
     }
   }
 
@@ -180,6 +192,10 @@ class NotificationService {
       case 'comment':
         channelId = 'social_interactions';
         channelName = 'Social Interactions';
+        break;
+      case 'call':
+        channelId = 'incoming_calls';
+        channelName = 'Incoming Calls';
         break;
       case 'chat_message':
       default:
@@ -223,6 +239,8 @@ class NotificationService {
       payload = '$type|${message.data['postId']}';
     } else if (type == 'comment' && message.data.containsKey('postId')) {
       payload = '$type|${message.data['postId']}';
+    } else if (type == 'call' && message.data.containsKey('callId')) {
+      payload = '$type|${message.data['callId']}';
     }
 
     await _localNotifications.show(

@@ -1,5 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/services.dart';
+
+import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/call_service.dart';
 import '../models/call_model.dart';
@@ -18,67 +22,131 @@ class IncomingCallListener extends StatefulWidget {
 
 class _IncomingCallListenerState extends State<IncomingCallListener> {
   final CallService _callService = CallService();
-  final String? _currentUserId = FirebaseAuth.instance.currentUser?.uid;
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  static const MethodChannel _platform = MethodChannel('com.paygo/ringtone');
 
-  BuildContext? _dialogContext;
-  String? _activeCallId;
-  bool _dialogOpen = false;
+  StreamSubscription<List<CallModel>>?
+  _incomingCallSub; // ✅ FIX 1: Track the subscription
+  StreamSubscription<DocumentSnapshot>? _specificCallSub;
+  CallModel? _currentCall;
+  String? _currentUserId;
+  bool _isDialogShowing = false; // Add this flag
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeListener(); // ✅ Cleaner async setup
+  }
+
+  Future<void> _initializeListener() async {
+    _currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
+    print('🔍 Current user ID: $_currentUserId'); // ✅ Debugging visibility
+
+    if (_currentUserId == null) return;
+
+    // ✅ FIX 2: Assign the subscription and listen to updates
+    _incomingCallSub = _callService.listenToIncomingCalls(_currentUserId!).listen((
+      calls,
+    ) async {
+      print('📞 Incoming call stream triggered. Calls found: ${calls.length}');
+
+      if (calls.isNotEmpty) {
+        final ringingCall = calls.first;
+        print(
+          '📞 Found call: ${ringingCall.callId}, calleeId: ${ringingCall.calleeId}, status: ${ringingCall.status}',
+        );
+
+        // If we are already showing a dialog for this specific call, ignore the event.
+        if (_isDialogShowing && _currentCall?.callId == ringingCall.callId) {
+          print(
+            "🔁 Already showing dialog for call ${ringingCall.callId}, ignoring duplicate event.",
+          );
+          return;
+        }
+
+        // If no dialog is showing, proceed to show one for the new call.
+        if (!_isDialogShowing && mounted) {
+          _currentCall = ringingCall;
+          _showAndMonitorCall(context, ringingCall);
+        }
+      }
+    });
+  }
+
+  void _dismissIncomingCallDialog() {
+    if (_isDialogShowing) {
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      _stopSystemRingtone();
+
+      _currentCall = null;
+      _specificCallSub?.cancel();
+      _isDialogShowing = false;
+    }
+  }
+
+  void _startSystemRingtone() async {
+    try {
+      await _platform.invokeMethod('playRingtone');
+    } catch (e) {
+      debugPrint('⚠️ Error playing system ringtone: $e');
+    }
+  }
+
+  void _stopSystemRingtone() async {
+    try {
+      await _platform.invokeMethod('stopRingtone');
+    } catch (e) {
+      debugPrint('⚠️ Error stopping system ringtone: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _incomingCallSub
+        ?.cancel(); // ✅ FIX 4: Cancel stream to prevent memory leaks
+    _specificCallSub?.cancel();
+    _audioPlayer.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (_currentUserId == null) {
-      return widget.child;
-    }
-
-    return StreamBuilder<List<CallModel>>(
-      stream: _callService.listenToIncomingCalls(_currentUserId),
-      builder: (context, snapshot) {
-        // Show incoming call dialog if there's a ringing call
-        if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-          final incomingCall = snapshot.data!.first;
-
-          // If dialog is not open or callId changed, show dialog
-          if (!_dialogOpen || _activeCallId != incomingCall.callId) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _showIncomingCallDialog(context, incomingCall);
-            });
-          }
-
-          // If call status is not ringing, close dialog if open
-          if (_dialogOpen &&
-              _activeCallId == incomingCall.callId &&
-              (incomingCall.status == 'ended' ||
-                  incomingCall.status == 'rejected' ||
-                  incomingCall.status == 'accepted')) {
-            if (_dialogContext != null) {
-              Navigator.of(_dialogContext!).pop();
-              _dialogOpen = false;
-              _activeCallId = null;
-              _dialogContext = null;
-            }
-          }
-        } else {
-          // No incoming call, close dialog if open
-          if (_dialogOpen && _dialogContext != null) {
-            Navigator.of(_dialogContext!).pop();
-            _dialogOpen = false;
-            _activeCallId = null;
-            _dialogContext = null;
-          }
-        }
-
-        return widget.child;
-      },
-    );
+    return widget.child;
   }
 
-  void _showIncomingCallDialog(BuildContext context, CallModel call) async {
-    if (!mounted) return;
-    if (_dialogOpen && _activeCallId == call.callId) return;
-    _dialogOpen = true;
-    _activeCallId = call.callId;
+  void _showAndMonitorCall(BuildContext context, CallModel call) {
+    // Start listening to this specific call for cancellations
+    _specificCallSub?.cancel();
+    _specificCallSub = _callService.listenToCall(call.callId).listen((
+      snapshot,
+    ) {
+      if (!snapshot.exists) {
+        print('📞 Call document ${call.callId} deleted. Dismissing dialog.');
+        _dismissIncomingCallDialog();
+        return;
+      }
+      final data = snapshot.data() as Map<String, dynamic>?;
+      final status = data?['status'] as String?;
 
-    // Get caller name and avatar
+      // If caller cancels or rejects before we answer, dismiss the dialog.
+      if (status == 'cancelled' || status == 'rejected') {
+        print('📞 Call ${call.callId} was $status. Dismissing dialog.');
+        _dismissIncomingCallDialog();
+      }
+    });
+
+    _showIncomingCallDialog(context, call);
+  }
+
+  Future<void> _showIncomingCallDialog(
+    BuildContext context,
+    CallModel call,
+  ) async {
+    _startSystemRingtone();
+
     String callerName = 'Unknown User';
     String? callerAvatar;
 
@@ -101,16 +169,16 @@ class _IncomingCallListenerState extends State<IncomingCallListener> {
             data?['avatar'] as String?;
       }
     } catch (e) {
-      debugPrint('Error fetching caller info: $e');
+      debugPrint('⚠️ Error fetching caller info: $e');
     }
 
-    if (!mounted) return;
+    if (!mounted) return; // ✅ Safety check
 
     showDialog(
+      // Use the root navigator's context to show dialog over everything
       context: context,
       barrierDismissible: false,
       builder: (BuildContext dialogContext) {
-        _dialogContext = dialogContext;
         return AlertDialog(
           title: Row(
             children: [
@@ -125,17 +193,27 @@ class _IncomingCallListenerState extends State<IncomingCallListener> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              CircleAvatar(
-                radius: 40,
-                backgroundColor: Colors.grey[300],
-                backgroundImage: callerAvatar != null
-                    ? CachedNetworkImageProvider(
-                        ApiService().getFullImageUrl(callerAvatar),
-                      )
-                    : null,
-                child: callerAvatar == null
-                    ? const Icon(Icons.person, size: 40)
-                    : null,
+              SizedBox(
+                width: 80,
+                height: 80,
+                child: ClipOval(
+                  child: CachedNetworkImage(
+                    imageUrl: ApiService().getFullImageUrl(callerAvatar!),
+                    fit: BoxFit.cover,
+                    placeholder: (context, url) =>
+                        const CircularProgressIndicator(),
+                    errorWidget: (context, url, error) => CircleAvatar(
+                      radius: 40,
+                      backgroundColor: Colors.grey[300],
+                      child: Text(
+                        callerName.isNotEmpty
+                            ? callerName[0].toUpperCase()
+                            : 'U',
+                        style: const TextStyle(fontSize: 40),
+                      ),
+                    ),
+                  ),
+                ),
               ),
               const SizedBox(height: 16),
               Text(
@@ -154,41 +232,28 @@ class _IncomingCallListenerState extends State<IncomingCallListener> {
           ),
           actionsAlignment: MainAxisAlignment.spaceEvenly,
           actions: [
-            // Reject button
             TextButton.icon(
               onPressed: () async {
                 await _callService.rejectCall(call.callId);
-                if (dialogContext.mounted) {
-                  Navigator.of(dialogContext).pop();
-                  _dialogOpen = false;
-                  _activeCallId = null;
-                  _dialogContext = null;
-                }
+                _stopSystemRingtone();
+
+                if (!mounted) return;
+                Navigator.of(
+                  dialogContext,
+                ).pop(); // Dismiss this specific dialog
               },
               icon: const Icon(Icons.call_end, color: Colors.red),
               label: const Text('Reject', style: TextStyle(color: Colors.red)),
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
-                ),
-              ),
             ),
-            // Accept button
             ElevatedButton.icon(
               onPressed: () async {
-                // Accept the call
                 await _callService.acceptCall(call.callId);
+                _stopSystemRingtone();
 
-                if (dialogContext.mounted) {
-                  Navigator.of(dialogContext).pop();
-                  _dialogOpen = false;
-                  _activeCallId = null;
-                  _dialogContext = null;
-                }
-
+                Navigator.of(
+                  dialogContext,
+                ).pop(); // Dismiss this specific dialog
                 if (context.mounted) {
-                  // Navigate to call screen
                   Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -198,6 +263,8 @@ class _IncomingCallListenerState extends State<IncomingCallListener> {
                         receiverId: _currentUserId!,
                         isInitiator: false,
                         otherUserName: callerName,
+                        isVideoCall: call.isVideoCall,
+                        otherUserAvatarUrl: callerAvatar,
                       ),
                     ),
                   );
@@ -208,15 +275,19 @@ class _IncomingCallListenerState extends State<IncomingCallListener> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.green,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
-                ),
               ),
             ),
           ],
         );
       },
-    );
+    ).then((_) {
+      // This block runs after the dialog is popped.
+      _stopSystemRingtone();
+
+      _specificCallSub?.cancel(); // Stop listening to the specific call
+      _currentCall = null;
+      _isDialogShowing = false;
+    });
+    _isDialogShowing = true;
   }
 }

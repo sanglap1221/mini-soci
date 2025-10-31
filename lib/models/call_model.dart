@@ -41,8 +41,8 @@ class CallModel {
       timestamp:
           map['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch,
       isVideoCall: map['isVideoCall'] as bool? ?? false,
-      offer: map['offer'] as Map<String, dynamic>?,
-      answer: map['answer'] as Map<String, dynamic>?,
+      offer: map['offer'] != null ? Map<String, dynamic>.from(map['offer']) : null,
+      answer: map['answer'] != null ? Map<String, dynamic>.from(map['answer']) : null,
     );
   }
 

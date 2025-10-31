@@ -135,7 +135,7 @@ class WebRTCHelper {
   }
 
   void _listenToCallSignals() {
-    FirebaseFirestore.instance
+    _callSignalSubscription = FirebaseFirestore.instance
         .collection('calls')
         .doc(callId)
         .snapshots()
@@ -153,7 +153,9 @@ class WebRTCHelper {
             onCallEnded?.call();
             return;
           } else if (status == 'accepted') {
-            onCallStateChanged?.call('Connected');
+            onCallStateChanged?.call(
+              'Connected',
+            ); // This will now trigger the timer
           }
 
           // Handle offer (for callee)
@@ -191,8 +193,13 @@ class WebRTCHelper {
       offerMap['type'],
     );
     await _peerConnection!.setRemoteDescription(offer);
-    await _createAnswer();
-    await _callService.acceptCall(callId);
+
+    // Only create answer if the signaling state is correct
+    if (_peerConnection!.signalingState ==
+        RTCSignalingState.RTCSignalingStateHaveRemoteOffer) {
+      await _createAnswer();
+      await _callService.acceptCall(callId);
+    }
   }
 
   Future<void> _handleAnswer(Map<String, dynamic> answerMap) async {
@@ -229,6 +236,9 @@ class WebRTCHelper {
 
   Future<void> dispose() async {
     _isDisposed = true;
+    await _callSignalSubscription?.cancel();
+    await localRenderer.dispose();
+    await remoteRenderer.dispose();
     _localStream?.getTracks().forEach((track) {
       track.stop();
     });
@@ -256,6 +266,23 @@ class WebRTCHelper {
   void switchCamera() {
     if (_localStream != null) {
       Helper.switchCamera(_localStream!.getVideoTracks().first);
+    }
+  }
+
+  Future<void> setSpeakerphoneOn(bool enabled) async {
+    if (_localStream != null) {
+      // The Helper class from flutter_webrtc can control the speakerphone.
+      await Helper.setSpeakerphoneOn(enabled);
+    }
+  }
+
+  void setHold(bool hold) {
+    if (_localStream != null) {
+      // We can implement "hold" by disabling the audio track from being sent.
+      final audioTracks = _localStream!.getAudioTracks();
+      for (var track in audioTracks) {
+        track.enabled = !hold;
+      }
     }
   }
 }

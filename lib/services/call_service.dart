@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:async/async.dart';
 import 'package:uuid/uuid.dart';
 import '../models/call_model.dart';
 
@@ -25,6 +26,7 @@ class CallService {
       'status': 'ringing',
       'isVideoCall': isVideoCall,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'participants': [callerId, calleeId],
       'offer': null,
       'answer': null,
       'callerCandidates': [],
@@ -126,5 +128,49 @@ class CallService {
               .map((doc) => CallModel.fromMap(doc.data(), doc.id))
               .toList(),
         );
+  }
+
+  /// Listen to the call history for a user.
+  /// Fetches calls where the user was either the caller or the callee.
+  /// This now uses a single, more efficient query.
+  Stream<List<CallModel>> getCallHistory(String userId) {
+    return _firestore
+        .collection('calls')
+        .where('participants', arrayContains: userId)
+        .where('status', whereIn: ['ended', 'rejected', 'cancelled'])
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map((doc) => CallModel.fromMap(doc.data(), doc.id))
+              .toList(),
+        );
+  }
+
+  /// Deletes all call history for a given user.
+  Future<void> clearCallHistory(String userId) async {
+    final WriteBatch batch = _firestore.batch();
+
+    // Query for calls where the user was the caller
+    final callerQuery = _firestore
+        .collection('calls')
+        .where('callerId', isEqualTo: userId);
+
+    // Query for calls where the user was the callee
+    final calleeQuery = _firestore
+        .collection('calls')
+        .where('calleeId', isEqualTo: userId);
+
+    final callerSnapshot = await callerQuery.get();
+    for (final doc in callerSnapshot.docs) {
+      batch.delete(doc.reference);
+    }
+
+    final calleeSnapshot = await calleeQuery.get();
+    for (final doc in calleeSnapshot.docs) {
+      batch.delete(doc.reference);
+    }
+
+    await batch.commit();
   }
 }

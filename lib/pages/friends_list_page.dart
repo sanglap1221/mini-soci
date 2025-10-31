@@ -164,22 +164,27 @@ class _FriendsListPageState extends State<FriendsListPage> {
 
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: CircleAvatar(
-        radius: 28,
-        backgroundColor: Colors.grey[300],
-        backgroundImage: fullProfilePicUrl != null
-            ? CachedNetworkImageProvider(fullProfilePicUrl)
-            : null,
-        child: fullProfilePicUrl == null
-            ? Text(
+      leading: SizedBox(
+        width: 56,
+        height: 56,
+        child: ClipOval(
+          child: CachedNetworkImage(
+            imageUrl: fullProfilePicUrl ?? '',
+            fit: BoxFit.cover,
+            placeholder: (context, url) => const CircularProgressIndicator(),
+            errorWidget: (context, url, error) => CircleAvatar(
+              radius: 28,
+              backgroundColor: Colors.grey[300],
+              child: Text(
                 userName.isNotEmpty ? userName[0].toUpperCase() : '?',
                 style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
-                  color: Colors.white,
                 ),
-              )
-            : null,
+              ),
+            ),
+          ),
+        ),
       ),
       title: Text(
         displayName,

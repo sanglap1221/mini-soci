@@ -127,16 +127,23 @@ class _ChatListPageState extends State<ChatListPage> {
             chatDataByUserId[otherId] = data;
           }
 
-          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: _firestore
-                .collection('users')
-                .orderBy('username')
-                .snapshots(),
+          final otherUserIds = chatDataByUserId.keys.toList();
+          if (otherUserIds.isEmpty) {
+            return _buildStatusMessage(
+              icon: Icons.chat_bubble_outline,
+              message: 'You can start a conversation.',
+            );
+          }
+
+          return FutureBuilder<
+            Map<String, QueryDocumentSnapshot<Map<String, dynamic>>>
+          >(
+            future: _fetchUsersByIds(otherUserIds),
             builder: (context, userSnapshot) {
               if (userSnapshot.hasError) {
                 return _buildStatusMessage(
                   icon: Icons.error_outline,
-                  message: 'Something went wrong loading users.',
+                  message: 'Something went wrong loading user data.',
                 );
               }
 
@@ -144,11 +151,19 @@ class _ChatListPageState extends State<ChatListPage> {
                 return const Center(child: CircularProgressIndicator());
               }
 
-              final allUsers =
-                  userSnapshot.data?.docs
-                      .where((doc) => doc.id != currentUser.uid)
-                      .toList() ??
-                  [];
+              final userById = userSnapshot.data ?? {};
+
+              // Create a list of all users, prioritizing those with active chats.
+              final allUsers = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+              final seenUserIds = <String>{};
+
+              for (final userId in chatDataByUserId.keys) {
+                if (userById.containsKey(userId) &&
+                    !seenUserIds.contains(userId)) {
+                  allUsers.add(userById[userId]!);
+                  seenUserIds.add(userId);
+                }
+              }
 
               if (allUsers.isEmpty) {
                 return _buildStatusMessage(
@@ -157,43 +172,7 @@ class _ChatListPageState extends State<ChatListPage> {
                 );
               }
 
-              final Map<String, QueryDocumentSnapshot<Map<String, dynamic>>>
-              userById = {for (final doc in allUsers) doc.id: doc};
-
-              final chatUsers = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-              final seenChatUserIds = <String>{};
-
-              for (final doc in chatDocs) {
-                final data = doc.data();
-                final participants = (data['participants'] as List<dynamic>?)
-                    ?.whereType<String>()
-                    .toList();
-                if (participants == null || participants.isEmpty) {
-                  continue;
-                }
-
-                final otherId = _otherParticipantId(
-                  currentUser.uid,
-                  participants,
-                );
-                if (otherId == null || seenChatUserIds.contains(otherId)) {
-                  continue;
-                }
-
-                final userDoc = userById[otherId];
-                if (userDoc != null) {
-                  chatUsers.add(userDoc);
-                  seenChatUserIds.add(otherId);
-                }
-              }
-
-              final nonChatUsers = allUsers
-                  .where((doc) => !seenChatUserIds.contains(doc.id))
-                  .toList();
-
-              final finalList = [...chatUsers, ...nonChatUsers];
-
-              if (finalList.isEmpty) {
+              if (allUsers.isEmpty) {
                 return _buildStatusMessage(
                   icon: Icons.chat_bubble_outline,
                   message: 'You can start a conversation.',
@@ -201,9 +180,9 @@ class _ChatListPageState extends State<ChatListPage> {
               }
 
               return ListView.builder(
-                itemCount: finalList.length,
+                itemCount: allUsers.length,
                 itemBuilder: (context, index) {
-                  final userDoc = finalList[index];
+                  final userDoc = allUsers[index];
                   final userData = userDoc.data();
                   final otherUserId = userDoc.id;
                   final displayName = _resolveUsernameForUserDoc(
@@ -279,6 +258,29 @@ class _ChatListPageState extends State<ChatListPage> {
         },
       ),
     );
+  }
+
+  Future<Map<String, QueryDocumentSnapshot<Map<String, dynamic>>>>
+  _fetchUsersByIds(List<String> userIds) async {
+    if (userIds.isEmpty) {
+      return {};
+    }
+
+    // Firestore 'whereIn' queries are limited to 30 items per query.
+    // We handle this by splitting the list into chunks if necessary.
+    final userMap = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+    for (var i = 0; i < userIds.length; i += 30) {
+      final chunk = userIds.sublist(
+        i,
+        i + 30 > userIds.length ? userIds.length : i + 30,
+      );
+      final userQuery = await _firestore
+          .collection('users')
+          .where(FieldPath.documentId, whereIn: chunk)
+          .get();
+      userMap.addAll({for (var doc in userQuery.docs) doc.id: doc});
+    }
+    return userMap;
   }
 
   static String _fallbackSubtitle(String lastMessage) {

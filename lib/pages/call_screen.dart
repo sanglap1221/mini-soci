@@ -1,13 +1,20 @@
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:pay_go/services/webrtc_helper.dart';
+import 'package:pay_go/services/api_service.dart';
 
 class CallScreen extends StatefulWidget {
   final String callId;
   final String callerId;
   final String receiverId;
   final bool isInitiator;
+  final bool isVideoCall;
   final String otherUserName;
+  final String? otherUserAvatarUrl;
 
   const CallScreen({
     super.key,
@@ -15,7 +22,9 @@ class CallScreen extends StatefulWidget {
     required this.callerId,
     required this.receiverId,
     required this.isInitiator,
+    required this.isVideoCall,
     required this.otherUserName,
+    this.otherUserAvatarUrl,
   });
 
   @override
@@ -23,43 +32,124 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
+  StreamSubscription<DocumentSnapshot>? _callDocSub;
   late WebRTCHelper _webrtcHelper;
   bool _isAudioOn = true;
   bool _isVideoOn = true;
+  bool _isSpeakerOn = false;
+  bool _isOnHold = false;
   bool _isInitialized = false;
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  final ApiService _apiService = ApiService();
+  Timer? _callTimer;
+  Duration _callDuration = Duration.zero;
+  String _callStatus = 'Connecting...';
 
   @override
   void initState() {
     super.initState();
+    _listenToCallStatus();
     _initializeWebRTC();
+
+    // Start ringing sound if this user is the one making the call
+    if (widget.isInitiator) {
+      _startRingingSound();
+      _callStatus = 'Ringing...';
+    }
   }
 
-  Future<void> _initializeWebRTC() async {
-    _webrtcHelper = WebRTCHelper(
-      callId: widget.callId,
-      isVideoCall: true, // Assuming video call, adjust as needed
-      isCaller: widget.isInitiator,
-    );
-    await _webrtcHelper.initialize();
+  void _listenToCallStatus() {
+    _callDocSub = FirebaseFirestore.instance
+        .collection('calls')
+        .doc(widget.callId)
+        .snapshots()
+        .listen((snapshot) {
+          final data = snapshot.data();
+          if (data == null || data['status'] == 'cancelled') {
+            _onCallCancelled();
+          }
+        });
+  }
+
+  void _onCallCancelled() {
     if (mounted) {
-      setState(() {
-        _isInitialized = true;
-      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Call was cancelled')));
+      Navigator.of(context).pop();
     }
   }
 
   @override
   void dispose() {
+    _callDocSub?.cancel();
+    _audioPlayer.dispose();
+    _callTimer?.cancel();
     if (_isInitialized) {
       _webrtcHelper.dispose();
     }
     super.dispose();
   }
 
+  Future<void> _initializeWebRTC() async {
+    _webrtcHelper = WebRTCHelper(
+      callId: widget.callId,
+      isVideoCall: widget.isVideoCall,
+      isCaller: widget.isInitiator,
+      onCallStateChanged: (state) {
+        if (mounted) {
+          setState(() {
+            _callStatus = state;
+          });
+          if (state == 'Connected') {
+            _stopRingingSound();
+            _startCallTimer();
+          }
+        }
+      },
+      onCallEnded: () {
+        if (mounted) {
+          _stopRingingSound();
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Call ended')));
+          Navigator.of(context).pop();
+        }
+      },
+    );
+    await _webrtcHelper.initialize();
+    if (mounted) {
+      setState(() {
+        _isInitialized = true;
+      });
+      if (!widget.isInitiator) {
+        _webrtcHelper.setSpeakerphoneOn(widget.isVideoCall);
+      }
+    }
+  }
+
   void _toggleAudio() {
     setState(() {
-      _isAudioOn = !_isAudioOn;
-      _webrtcHelper.toggleAudio();
+      if (!_isOnHold) {
+        _isAudioOn = !_isAudioOn;
+        _webrtcHelper.toggleAudio();
+      }
+    });
+  }
+
+  void _toggleSpeaker() {
+    setState(() {
+      _isSpeakerOn = !_isSpeakerOn;
+      _webrtcHelper.setSpeakerphoneOn(_isSpeakerOn);
+    });
+  }
+
+  void _toggleHold() {
+    setState(() {
+      _isOnHold = !_isOnHold;
+      _webrtcHelper.setHold(_isOnHold);
+      // When going on hold, mute the mic. When coming off hold, restore mic state.
+      _isAudioOn = !_isOnHold;
     });
   }
 
@@ -76,11 +166,35 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _endCall() async {
     if (_isInitialized) {
+      _stopRingingSound();
       await _webrtcHelper.endCall();
     }
     if (mounted) {
       Navigator.pop(context);
     }
+  }
+
+  void _startCallTimer() {
+    _callTimer?.cancel();
+    _callTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(
+        () => _callDuration = Duration(seconds: _callDuration.inSeconds + 1),
+      );
+    });
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final hours = twoDigits(duration.inHours);
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return duration.inHours > 0
+        ? '$hours:$minutes:$seconds'
+        : '$minutes:$seconds';
   }
 
   @override
@@ -89,17 +203,12 @@ class _CallScreenState extends State<CallScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     return Scaffold(
+      backgroundColor: Colors.blueGrey.shade900,
       body: Stack(
         children: [
-          Positioned.fill(
-            child: (_webrtcHelper.remoteRenderer.srcObject != null)
-                ? RTCVideoView(
-                    _webrtcHelper.remoteRenderer,
-                    objectFit:
-                        RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-                  )
-                : const Center(child: CircularProgressIndicator()),
-          ),
+          // Background View
+          _buildBackgroundView(),
+
           Positioned(
             top: 60,
             left: 20,
@@ -121,7 +230,22 @@ class _CallScreenState extends State<CallScreen> {
               textAlign: TextAlign.center,
             ),
           ),
-          if (_webrtcHelper.localRenderer.srcObject != null)
+          // Call Status / Timer
+          Positioned(
+            top: 100,
+            left: 20,
+            right: 20,
+            child: Center(
+              child: Text(
+                _callDuration > Duration.zero
+                    ? _formatDuration(_callDuration)
+                    : _callStatus,
+                style: const TextStyle(color: Colors.white70, fontSize: 18),
+              ),
+            ),
+          ),
+          if (widget.isVideoCall &&
+              _webrtcHelper.localRenderer.srcObject != null)
             Positioned(
               top: 40,
               right: 20,
@@ -142,18 +266,37 @@ class _CallScreenState extends State<CallScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
+                // Speaker Button
                 IconButton(
-                  icon: Icon(_isAudioOn ? Icons.mic : Icons.mic_off),
+                  icon: Icon(
+                    _isSpeakerOn ? Icons.volume_up : Icons.volume_down,
+                  ),
+                  onPressed: _toggleSpeaker,
+                ),
+                // Mute/Unmute Button
+                IconButton(
+                  icon: Icon(
+                    _isOnHold || !_isAudioOn ? Icons.mic_off : Icons.mic,
+                  ),
                   onPressed: _toggleAudio,
                 ),
+                // Hold Button
                 IconButton(
-                  icon: Icon(_isVideoOn ? Icons.videocam : Icons.videocam_off),
-                  onPressed: _toggleVideo,
+                  icon: Icon(_isOnHold ? Icons.play_arrow : Icons.pause),
+                  onPressed: _toggleHold,
                 ),
-                IconButton(
-                  icon: const Icon(Icons.switch_camera),
-                  onPressed: _switchCamera,
-                ),
+                if (widget.isVideoCall)
+                  IconButton(
+                    icon: Icon(
+                      _isVideoOn ? Icons.videocam : Icons.videocam_off,
+                    ),
+                    onPressed: _toggleVideo,
+                  ),
+                if (widget.isVideoCall)
+                  IconButton(
+                    icon: const Icon(Icons.switch_camera),
+                    onPressed: _switchCamera,
+                  ),
                 IconButton(
                   icon: const Icon(Icons.call_end, color: Colors.red),
                   onPressed: _endCall,
@@ -164,5 +307,80 @@ class _CallScreenState extends State<CallScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildBackgroundView() {
+    if (widget.isVideoCall) {
+      // For video calls, show the remote video stream
+      return Positioned.fill(
+        child: (_webrtcHelper.remoteRenderer.srcObject != null)
+            ? RTCVideoView(
+                _webrtcHelper.remoteRenderer,
+                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+              )
+            : const Center(child: CircularProgressIndicator()),
+      );
+    } else {
+      // For audio calls, show the user's avatar
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircleAvatar(
+              radius: 80,
+              backgroundColor: Colors.white24,
+              child: ClipOval(
+                child: widget.otherUserAvatarUrl != null
+                    ? CachedNetworkImage(
+                        imageUrl: _apiService.getFullImageUrl(
+                          widget.otherUserAvatarUrl!,
+                        ),
+                        fit: BoxFit.cover,
+                        width: 160,
+                        height: 160,
+                        placeholder: (context, url) => const Center(
+                          child: CircularProgressIndicator(color: Colors.white),
+                        ),
+                        errorWidget: (context, url, error) =>
+                            _buildFallbackAvatar(),
+                      )
+                    : _buildFallbackAvatar(),
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
+        ),
+      );
+    }
+  }
+
+  Widget _buildFallbackAvatar() {
+    return Container(
+      width: 160,
+      height: 160,
+      alignment: Alignment.center,
+      child: Text(
+        widget.otherUserName.isNotEmpty
+            ? widget.otherUserName[0].toUpperCase()
+            : 'U',
+        style: const TextStyle(
+          fontSize: 80,
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  void _stopRingingSound() {
+    _audioPlayer.stop();
+  }
+
+  void _startRingingSound() async {
+    // This sound is for the person making the call
+    if (widget.isInitiator) {
+      await _audioPlayer.setReleaseMode(ReleaseMode.loop);
+      await _audioPlayer.play(AssetSource('sounds/calling.mp3'));
+    }
   }
 }

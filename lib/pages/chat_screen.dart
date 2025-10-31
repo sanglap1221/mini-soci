@@ -1,4 +1,5 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -28,11 +29,49 @@ class _ChatScreenState extends State<ChatScreen> {
   final _apiService = ApiService();
   final _callService = CallService();
   String _otherUserName = 'User';
+  String? _otherUserAvatarUrl;
+
+  // Track current call status and callId if a call is initiated
+  String? _activeCallId;
+  String? _activeCallStatus;
+  StreamSubscription<DocumentSnapshot>? _callStatusSubscription;
+  @override
+  void dispose() {
+    _cancelCallIfNotAnswered();
+    super.dispose();
+    _callStatusSubscription?.cancel();
+  }
+
+  void _cancelCallIfNotAnswered() async {
+    // If a call was started and is still ringing, cancel it
+    if (_activeCallId != null && _activeCallStatus == 'ringing') {
+      await FirebaseFirestore.instance
+          .collection('calls')
+          .doc(_activeCallId)
+          .update({'status': 'cancelled'});
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _loadOtherUserData();
     _markMessagesAsRead();
+  }
+
+  Future<void> _loadOtherUserData() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.otherUserId)
+          .get();
+      if (mounted && doc.exists) {
+        final userData = doc.data() ?? {};
+        _updateOtherUserInfo(userData);
+      }
+    } catch (e) {
+      debugPrint('Error loading other user data: $e');
+    }
   }
 
   Future<void> _markMessagesAsRead() async {
@@ -90,65 +129,43 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: FutureBuilder<DocumentSnapshot>(
-          future: FirebaseFirestore.instance
-              .collection('users')
-              .doc(widget.otherUserId)
-              .get(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Text('Loading...');
-            }
-            if (!snapshot.hasData) {
-              return const Text('Unknown User');
-            }
-            final userData =
-                snapshot.data?.data() as Map<String, dynamic>? ?? {};
-            final displayName =
-                userData['username'] as String? ?? 'Unknown User';
-
-            // Store the display name for call screen
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && _otherUserName != displayName) {
-                setState(() {
-                  _otherUserName = displayName;
-                });
-              }
-            });
-
-            final avatarUrl = _toFullImageUrl(_extractAvatarPath(userData));
-
-            return InkWell(
-              onTap: () {
-                // Navigate to user profile
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) =>
-                        ProfilePage(userId: widget.otherUserId),
-                  ),
-                );
-              },
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 20,
-                    backgroundImage: avatarUrl != null
-                        ? CachedNetworkImageProvider(
-                            avatarUrl,
-                            cacheManager: AppCacheManagers.imageCache,
-                          )
-                        : null,
-                    child: avatarUrl == null
-                        ? const Icon(Icons.person, size: 20)
-                        : null,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(displayName),
-                ],
+        title: InkWell(
+          onTap: () {
+            // Navigate to user profile
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ProfilePage(userId: widget.otherUserId),
               ),
             );
           },
+          child: Row(
+            children: [
+              SizedBox(
+                width: 40,
+                height: 40,
+                child: ClipOval(
+                  child: CachedNetworkImage(
+                    imageUrl: _otherUserAvatarUrl ?? '',
+                    cacheManager: AppCacheManagers.imageCache,
+                    fit: BoxFit.cover,
+                    placeholder: (context, url) =>
+                        const CircularProgressIndicator(),
+                    errorWidget: (context, url, error) => CircleAvatar(
+                      radius: 20,
+                      child: Text(
+                        _otherUserName.isNotEmpty
+                            ? _otherUserName[0].toUpperCase()
+                            : 'U',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(_otherUserName),
+            ],
+          ),
         ),
         actions: [
           // Audio call button
@@ -266,7 +283,24 @@ class _ChatScreenState extends State<ChatScreen> {
         isVideoCall: isVideoCall,
       );
 
+      // Track the active call
+      _activeCallId = callId;
+      _activeCallStatus = 'ringing';
+
       if (!mounted) return;
+
+      // Listen for call status updates (for incoming call cancellation)
+      _callStatusSubscription = FirebaseFirestore.instance
+          .collection('calls')
+          .doc(callId)
+          .snapshots()
+          .listen((snapshot) {
+            final data = snapshot.data();
+            if (data != null && data['status'] != null) {
+              // This status is used to cancel the call if user navigates away
+              _activeCallStatus = data['status'];
+            }
+          });
 
       // Navigate to CallScreen
       Navigator.push(
@@ -277,7 +311,9 @@ class _ChatScreenState extends State<ChatScreen> {
             callerId: currentUserId!,
             receiverId: widget.otherUserId,
             isInitiator: true,
+            isVideoCall: isVideoCall,
             otherUserName: _otherUserName,
+            otherUserAvatarUrl: _otherUserAvatarUrl,
           ),
         ),
       );
@@ -288,6 +324,19 @@ class _ChatScreenState extends State<ChatScreen> {
           context,
         ).showSnackBar(SnackBar(content: Text('Failed to start call: $e')));
       }
+    }
+  }
+
+  void _updateOtherUserInfo(Map<String, dynamic> userData) {
+    final displayName = userData['username'] as String? ?? 'Unknown User';
+    final avatarUrl = _toFullImageUrl(_extractAvatarPath(userData));
+
+    if (mounted &&
+        (_otherUserName != displayName || _otherUserAvatarUrl != avatarUrl)) {
+      setState(() {
+        _otherUserName = displayName;
+        _otherUserAvatarUrl = avatarUrl;
+      });
     }
   }
 
