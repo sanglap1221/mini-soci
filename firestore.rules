@@ -103,6 +103,7 @@ service cloud.firestore {
           request.resource.data.readAt == request.time);
 
       allow delete: if isRecipient();
+      
     }
 
     // ======================
@@ -159,9 +160,12 @@ service cloud.firestore {
 
       allow update: if isCallParticipant();
 
-      // 🔹 Only allow delete when the call status is terminal to prevent accidental removal of active calls.
-      allow delete: if isCallParticipant() &&
-        (resource.data.status in ['ended', 'rejected', 'cancelled']);
+      // 🔹 Allow participants to delete historical entries; block only active/ringing calls.
+      allow delete: if isCallParticipant() && (
+        !resource.data.keys().hasAny(['status']) ||
+        resource.data.status in ['ended', 'rejected', 'cancelled', 'missed'] ||
+        resource.data.status == null
+      );
     }
   }
 }

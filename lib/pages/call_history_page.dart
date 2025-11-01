@@ -87,34 +87,34 @@ class _CallHistoryPageState extends State<CallHistoryPage> {
       appBar: AppBar(
         title: const Text('Call History'),
         actions: [
-          IconButton(
-            onPressed: () async {
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Clear Call History'),
-                  content: const Text(
-                    'Are you sure you want to delete all call history?',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('Cancel'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Yes, Clear'),
-                    ),
-                  ],
-                ),
-              );
-              if (confirm == true) {
-                await _callService.clearCallHistory(_currentUserId!);
-              }
-            },
-            icon: const Icon(Icons.delete_forever),
-            tooltip: 'Clear All',
-          ),
+          // IconButton(
+          //   onPressed: () async {
+          //     final confirm = await showDialog<bool>(
+          //       context: context,
+          //       builder: (context) => AlertDialog(
+          //         title: const Text('Clear Call History'),
+          //         content: const Text(
+          //           'Are you sure you want to delete all call history?',
+          //         ),
+          //         actions: [
+          //           TextButton(
+          //             onPressed: () => Navigator.pop(context, false),
+          //             child: const Text('Cancel'),
+          //           ),
+          //           TextButton(
+          //             onPressed: () => Navigator.pop(context, true),
+          //             child: const Text('Yes, Clear'),
+          //           ),
+          //         ],
+          //       ),
+          //     );
+          //     if (confirm == true) {
+          //       await _callService.clearCallHistory(_currentUserId!);
+          //     }
+          //   },
+          //   icon: const Icon(Icons.delete_forever),
+          //   tooltip: 'Clear All',
+          // ),
         ],
       ),
 
