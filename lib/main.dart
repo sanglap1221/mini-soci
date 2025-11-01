@@ -4,9 +4,11 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:pay_go/firebase_options.dart';
 import 'package:pay_go/pages/auth_gate.dart';
 import 'package:pay_go/services/api_service.dart';
+import 'package:pay_go/services/call_service.dart';
 import 'package:pay_go/services/notification_service.dart';
 import 'package:pay_go/widgets/notification_handler.dart';
 import 'package:pay_go/widgets/incoming_call_listener.dart';
@@ -23,6 +25,10 @@ void main() async {
     options: DefaultFirebaseOptions
         .currentPlatform, // Uncomment this line after generating firebase_options.dart
   );
+  await Hive.initFlutter(); // 🔑 initialize Hive
+  CallService.registerAdapters(); // register the adapter
+  await CallService().initializeLocalCache(); // open call_history box
+
   final overrideBaseUrl = await _resolveAndroidLocalBaseUrl();
   await ApiService().initialize(overrideBaseUrl: overrideBaseUrl);
 
@@ -101,7 +107,8 @@ Future<bool> _isServerReachable(String baseUrl) async {
     await response.drain();
     client.close(force: true);
     return response.statusCode >= 200 && response.statusCode < 500;
-  } catch (_) {
+  } catch (e) {
+    debugPrint('Failed to reach $baseUrl: $e');
     return false;
   }
 }

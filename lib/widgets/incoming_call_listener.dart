@@ -76,8 +76,8 @@ class _IncomingCallListenerState extends State<IncomingCallListener> {
 
   void _dismissIncomingCallDialog() {
     if (_isDialogShowing) {
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.of(context, rootNavigator: true).pop();
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).maybePop();
       }
       _stopSystemRingtone();
 
@@ -137,6 +137,14 @@ class _IncomingCallListenerState extends State<IncomingCallListener> {
         _dismissIncomingCallDialog();
       }
     });
+
+    if (call.status == 'ringing') {
+      _callService.scheduleRingingTimeout(
+        call.callId,
+        // startedAtMillis: call.timestamp,
+        startedAt: call.timestamp,
+      );
+    }
 
     _showIncomingCallDialog(context, call);
   }
@@ -198,7 +206,9 @@ class _IncomingCallListenerState extends State<IncomingCallListener> {
                 height: 80,
                 child: ClipOval(
                   child: CachedNetworkImage(
-                    imageUrl: ApiService().getFullImageUrl(callerAvatar!),
+                    imageUrl: callerAvatar != null
+                        ? ApiService().getFullImageUrl(callerAvatar)
+                        : '',
                     fit: BoxFit.cover,
                     placeholder: (context, url) =>
                         const CircularProgressIndicator(),
@@ -234,13 +244,20 @@ class _IncomingCallListenerState extends State<IncomingCallListener> {
           actions: [
             TextButton.icon(
               onPressed: () async {
-                await _callService.rejectCall(call.callId);
-                _stopSystemRingtone();
-
-                if (!mounted) return;
-                Navigator.of(
-                  dialogContext,
-                ).pop(); // Dismiss this specific dialog
+                final messenger = ScaffoldMessenger.of(context);
+                try {
+                  await _callService.rejectCall(call.callId);
+                } on FirebaseException catch (error) {
+                  final message =
+                      error.message ??
+                      'Unable to reject call. Please try again.';
+                  messenger.showSnackBar(SnackBar(content: Text(message)));
+                } finally {
+                  _stopSystemRingtone();
+                  if (mounted) {
+                    Navigator.of(context, rootNavigator: true).maybePop();
+                  }
+                }
               },
               icon: const Icon(Icons.call_end, color: Colors.red),
               label: const Text('Reject', style: TextStyle(color: Colors.red)),

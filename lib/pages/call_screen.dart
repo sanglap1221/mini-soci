@@ -6,6 +6,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:pay_go/services/webrtc_helper.dart';
 import 'package:pay_go/services/api_service.dart';
+import 'package:pay_go/services/call_service.dart';
 
 class CallScreen extends StatefulWidget {
   final String callId;
@@ -34,6 +35,7 @@ class CallScreen extends StatefulWidget {
 class _CallScreenState extends State<CallScreen> {
   StreamSubscription<DocumentSnapshot>? _callDocSub;
   late WebRTCHelper _webrtcHelper;
+  final CallService _callService = CallService();
   bool _isAudioOn = true;
   bool _isVideoOn = true;
   bool _isSpeakerOn = false;
@@ -64,21 +66,65 @@ class _CallScreenState extends State<CallScreen> {
         .collection('calls')
         .doc(widget.callId)
         .snapshots()
-        .listen((snapshot) {
+        .listen((snapshot) async {
+          if (!snapshot.exists) {
+            await _handleRemoteHangup('Call ended');
+            return;
+          }
+
           final data = snapshot.data();
-          if (data == null || data['status'] == 'cancelled') {
-            _onCallCancelled();
+          if (data == null) {
+            return;
+          }
+
+          final status = data['status'] as String?;
+          if (status == null) {
+            return;
+          }
+
+          if (status != 'ringing') {
+            _callService.cancelRingingTimeout(widget.callId);
+          }
+
+          switch (status) {
+            case 'accepted':
+              _stopRingingSound();
+              break;
+            case 'cancelled':
+              await _handleRemoteHangup('Call was cancelled');
+              break;
+            case 'rejected':
+              await _handleRemoteHangup('Call was rejected');
+              break;
+            case 'ended':
+              await _handleRemoteHangup('Call ended');
+              break;
           }
         });
   }
 
-  void _onCallCancelled() {
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Call was cancelled')));
-      Navigator.of(context).pop();
+  Future<void> _handleRemoteHangup(String message) async {
+    if (_isClosing) {
+      return;
     }
+    _isClosing = true;
+    _callDocSub?.cancel();
+    _callService.cancelRingingTimeout(widget.callId);
+    _stopRingingSound();
+    _callTimer?.cancel();
+
+    if (_isInitialized) {
+      await _webrtcHelper.dispose();
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+    Navigator.of(context).pop();
   }
 
   @override
@@ -109,6 +155,9 @@ class _CallScreenState extends State<CallScreen> {
         }
       },
       onCallEnded: () {
+        if (!mounted || _isClosing) {
+          return;
+        }
         if (mounted) {
           _endCall(showSnackbar: true);
         }
@@ -164,10 +213,12 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> _endCall({bool showSnackbar = false}) async {
     if (_isClosing) return; // Prevent re-entry
     _isClosing = true;
+    _callService.cancelRingingTimeout(widget.callId);
 
     if (_isInitialized) {
       _stopRingingSound();
-      await _webrtcHelper.endCall();
+      final actorId = widget.isInitiator ? widget.callerId : widget.receiverId;
+      await _webrtcHelper.endCall(actorId: actorId);
     }
     if (mounted) {
       if (showSnackbar) {

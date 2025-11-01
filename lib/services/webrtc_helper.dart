@@ -35,8 +35,8 @@ class WebRTCHelper {
     onCallStateChanged?.call(isCaller ? 'Calling...' : 'Ringing...');
   }
 
-  Future<void> endCall() async {
-    await _callService.endCall(callId);
+  Future<void> endCall({String? actorId}) async {
+    await _callService.endCall(callId, actorId: actorId);
     await dispose();
     onCallEnded?.call();
   }
@@ -149,7 +149,13 @@ class WebRTCHelper {
 
           // Check call status
           final status = data['status'] as String?;
-          if (status == 'ended' || status == 'rejected') {
+          if (status != null && status != 'ringing') {
+            _callService.cancelRingingTimeout(callId);
+          }
+
+          if (status == 'ended' ||
+              status == 'rejected' ||
+              status == 'cancelled') {
             onCallEnded?.call();
             return;
           } else if (status == 'accepted') {

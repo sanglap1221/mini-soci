@@ -105,7 +105,7 @@ service cloud.firestore {
       allow delete: if isRecipient();
     }
 
-      // ======================
+    // ======================
     // CALLS (WebRTC Audio/Video)
     // ======================
     match /calls/{callId} {
@@ -113,39 +113,26 @@ service cloud.firestore {
         return request.auth != null;
       }
 
-      // ✅ Checks caller, callee, and participants array
       function isCallParticipant() {
         return isSignedIn() && (
-          resource.data.callerId == request.auth.uid || 
-          resource.data.calleeId == request.auth.uid ||
-          (resource.data.participants is list &&
+          (resource.data.keys().hasAny(['callerId']) &&
+           resource.data.callerId == request.auth.uid) ||
+          (resource.data.keys().hasAny(['calleeId']) &&
+           resource.data.calleeId == request.auth.uid) ||
+          (resource.data.keys().hasAny(['participants']) &&
+           resource.data.participants is list &&
            resource.data.participants.hasAny([request.auth.uid]))
         );
       }
 
-      // ✅ Used during creation (request.resource instead of resource)
-      function isCreatingParticipant() {
-        return isSignedIn() &&
-          (request.resource.data.participants is list &&
-           request.resource.data.participants.hasAny([request.auth.uid]));
-      }
-
-      // ✅ Only the caller can create a new call document
       function isCallCreator() {
         return isSignedIn() &&
           request.resource.data.callerId == request.auth.uid;
       }
 
-      // ✅ Allow reading calls if the user is a participant AND the status is valid for the context.
-      // This rule now mirrors the queries used in the app for both active calls and call history.
-      allow read: if isSignedIn() && resource.data.participants.hasAny([request.auth.uid]) && (
-          // Allow reading active/ringing calls for the CallScreen and listeners.
-          resource.data.status in ['ringing', 'accepted', 'active'] ||
-          // Allow reading completed calls for the CallHistoryPage.
-          resource.data.status in ['ended', 'rejected', 'cancelled']
-      );
+      // ✅ FIXED: allow read for any participant (including ended calls)
+      allow read: if isCallParticipant();
 
-      // ✅ Allow creating calls if the caller is authenticated and creates with valid structure
       allow create: if isCallCreator() &&
         request.resource.data.keys().hasAll([
           'callId',
@@ -157,24 +144,21 @@ service cloud.firestore {
           'participants',
           'offer',
           'answer',
-          'callerCandidates', 'calleeCandidates' // Allow all fields on create
+          'callerCandidates',
+          'calleeCandidates'
         ]) &&
         request.resource.data.callerId == request.auth.uid &&
         request.resource.data.calleeId is string &&
         request.resource.data.calleeId != request.auth.uid &&
-        request.resource.data.status in ['ringing', 'active', 'ended', 'rejected', 'cancelled'] && // 🟢 Added missing statuses
+        request.resource.data.status in ['ringing', 'active', 'ended', 'rejected', 'cancelled'] &&
         request.resource.data.isVideoCall is bool &&
         request.resource.data.participants == [
           request.resource.data.callerId,
           request.resource.data.calleeId
         ];
 
-      // ✅ Allow updates from anyone in the call (accept, reject, end, etc.)
       allow update: if isCallParticipant();
-
-      // ✅ Allow deletes (optional cleanup)
       allow delete: if isCallParticipant();
     }
-
   }
 }
