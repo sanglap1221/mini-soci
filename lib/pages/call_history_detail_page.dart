@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/call_model.dart';
+import 'profile_page.dart';
 
 class CallHistoryDetailPage extends StatelessWidget {
   const CallHistoryDetailPage({
@@ -24,7 +25,37 @@ class CallHistoryDetailPage extends StatelessWidget {
       ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
     return Scaffold(
-      appBar: AppBar(title: Text(contactName)),
+      appBar: AppBar(
+        title: Row(
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundImage: contactAvatarUrl != null
+                  ? NetworkImage(contactAvatarUrl!)
+                  : null,
+              child: contactAvatarUrl == null
+                  ? const Icon(Icons.person, size: 18)
+                  : null,
+            ),
+            const SizedBox(width: 12),
+            Flexible(
+              child: Text(
+                contactName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'View Profile',
+            icon: const Icon(Icons.person_outline),
+            onPressed: () => _openProfile(context),
+          ),
+        ],
+      ),
       body: ListView.builder(
         padding: const EdgeInsets.all(12),
         itemCount: sortedCalls.length,
@@ -130,5 +161,11 @@ class CallHistoryDetailPage extends StatelessWidget {
       default:
         return Colors.blueGrey;
     }
+  }
+
+  void _openProfile(BuildContext context) {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => ProfilePage(userId: otherUserId)));
   }
 }

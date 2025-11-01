@@ -294,24 +294,39 @@ class CallService {
         );
   }
 
-  /// Deletes all call history for a given user.
+  /// Deletes all call history for a given user, safely handling both old and new docs.
   Future<void> clearCallHistory(String userId) async {
     final WriteBatch batch = _firestore.batch();
 
-    // Use a single query on the 'participants' array to find all calls for the user.
-    final query = _firestore
+    // Query all calls where the user is a participant, caller, or callee.
+    final participantsSnapshot = await _firestore
         .collection('calls')
-        .where('participants', arrayContains: userId);
+        .where('participants', arrayContains: userId)
+        .get();
 
-    final snapshot = await query.get();
-    for (final doc in snapshot.docs) {
+    final callerSnapshot = await _firestore
+        .collection('calls')
+        .where('callerId', isEqualTo: userId)
+        .get();
+
+    final calleeSnapshot = await _firestore
+        .collection('calls')
+        .where('calleeId', isEqualTo: userId)
+        .get();
+
+    final allDocs = <DocumentSnapshot>{}
+      ..addAll(participantsSnapshot.docs)
+      ..addAll(callerSnapshot.docs)
+      ..addAll(calleeSnapshot.docs);
+
+    for (final doc in allDocs) {
       batch.delete(doc.reference);
     }
 
     await batch.commit();
 
     final box = Hive.box<CallModel>(callHistoryBoxName);
-    final idsToDelete = snapshot.docs.map((doc) => doc.id).toList();
+    final idsToDelete = allDocs.map((doc) => doc.id).toList();
     if (idsToDelete.isNotEmpty) {
       await box.deleteAll(idsToDelete);
     }

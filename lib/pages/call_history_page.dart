@@ -172,10 +172,29 @@ class _CallHistoryPageState extends State<CallHistoryPage> {
                             ? const Icon(Icons.person)
                             : null,
                       ),
-                      title: Text(displayName),
-                      subtitle: Text(
-                        _buildSummarySubtitle(summary),
-                        style: TextStyle(color: _callColor(summary.latestCall)),
+                      title: Text(
+                        displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _buildSummarySubtitle(summary),
+                            style: TextStyle(
+                              color: _callColor(summary.latestCall),
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${summary.completedCalls} completed • ${summary.missedCalls} missed',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: Colors.grey[600]),
+                          ),
+                        ],
                       ),
                       trailing: SizedBox(
                         width: 112,
