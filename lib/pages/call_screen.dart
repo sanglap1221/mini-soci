@@ -131,11 +131,9 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void dispose() {
     _callDocSub?.cancel();
-    _audioPlayer.dispose();
     _callTimer?.cancel();
-    if (_isInitialized) {
-      _webrtcHelper.dispose();
-    }
+    _callStopwatch?.stop();
+    _webrtcHelper.dispose();
     super.dispose();
   }
 
