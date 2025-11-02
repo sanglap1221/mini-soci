@@ -225,13 +225,24 @@ class _ChatScreenState extends State<ChatScreen> {
                           vertical: 8,
                         ),
                         decoration: BoxDecoration(
-                          color: isMe ? Colors.blue : Colors.grey[300],
-                          borderRadius: BorderRadius.circular(20),
+                          color: isMe
+                              ? Theme.of(context).primaryColor
+                              : Colors.grey[200],
+                          borderRadius: BorderRadius.only(
+                            topLeft: const Radius.circular(20),
+                            topRight: const Radius.circular(20),
+                            bottomLeft: isMe
+                                ? const Radius.circular(20)
+                                : const Radius.circular(4),
+                            bottomRight: isMe
+                                ? const Radius.circular(4)
+                                : const Radius.circular(20),
+                          ),
                         ),
                         child: Text(
                           message['message'],
                           style: TextStyle(
-                            color: isMe ? Colors.white : Colors.black,
+                            color: isMe ? Colors.white : Colors.black87,
                           ),
                         ),
                       ),

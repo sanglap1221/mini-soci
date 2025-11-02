@@ -11,6 +11,7 @@ import '../utils/image_crop_helper.dart';
 import '../utils/post_viewer.dart';
 import '../utils/time_formatter.dart';
 import 'chat_screen.dart';
+import '../services/theme_controller.dart';
 import 'friends_list_page.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -374,57 +375,71 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget _buildProfilePicture(Map<String, dynamic>? userData) {
     return Stack(
       children: [
-        GestureDetector(
-          onTap: isCurrentUserProfile ? _showProfileOptions : null,
-          child: CircleAvatar(
-            radius: 50,
-            backgroundColor: Colors.grey[300],
-            child: _localProfileImage != null
-                ? ClipOval(
-                    child: Image.file(
-                      _localProfileImage!,
-                      width: 100,
-                      height: 100,
-                      fit: BoxFit.cover,
-                    ),
-                  )
-                : _remoteProfileImageUrl != null
-                ? ClipOval(
-                    child: CachedNetworkImage(
-                      cacheManager: AppCacheManagers.imageCache,
-                      imageUrl: _apiService.getFullImageUrl(
-                        _remoteProfileImageUrl!,
-                      ),
-                      width: 100,
-                      height: 100,
-                      fit: BoxFit.cover,
-                      placeholder: (context, url) => Container(
-                        width: 100,
-                        height: 100,
-                        alignment: Alignment.center,
-                        color: Colors.grey[300],
-                        child: const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
-                      errorWidget: (context, url, error) => Container(
-                        width: 100,
-                        height: 100,
-                        color: Colors.grey[300],
-                        child: Icon(
-                          Icons.person,
-                          size: 40,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                    ),
-                  )
-                : Text(
-                    (userData?['username'] ?? '?')[0].toUpperCase(),
-                    style: TextStyle(fontSize: 40, color: Colors.blue),
+        Container(
+          decoration: isCurrentUserProfile
+              ? BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Theme.of(context).primaryColor,
+                    width: 2.5,
                   ),
+                )
+              : null,
+          child: GestureDetector(
+            onTap: isCurrentUserProfile ? _showProfileOptions : null,
+            child: CircleAvatar(
+              radius: 60,
+              backgroundColor: Colors.grey[300],
+              child: _localProfileImage != null
+                  ? ClipOval(
+                      child: Image.file(
+                        _localProfileImage!,
+                        width: 120,
+                        height: 120,
+                        fit: BoxFit.cover,
+                      ),
+                    )
+                  : _remoteProfileImageUrl != null
+                  ? ClipOval(
+                      child: CachedNetworkImage(
+                        cacheManager: AppCacheManagers.imageCache,
+                        imageUrl: _apiService.getFullImageUrl(
+                          _remoteProfileImageUrl!,
+                        ),
+                        width: 100,
+                        height: 100,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Container(
+                          width: 120,
+                          height: 100,
+                          alignment: Alignment.center,
+                          color: Colors.grey[300],
+                          child: const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                        errorWidget: (context, url, error) => Container(
+                          width: 120,
+                          height: 100,
+                          color: Colors.grey[300],
+                          child: Icon(
+                            Icons.person,
+                            size: 40,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ),
+                    )
+                  : Text(
+                      (userData?['username'] ?? '?')[0].toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 48,
+                        color: Theme.of(context).primaryColor,
+                      ),
+                    ),
+            ),
           ),
         ),
         if (isCurrentUserProfile)
@@ -434,12 +449,16 @@ class _ProfilePageState extends State<ProfilePage> {
             child: GestureDetector(
               onTap: _pickImage,
               child: Container(
-                padding: EdgeInsets.all(4),
+                padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
-                  color: Colors.blue,
+                  color: Theme.of(context).primaryColor,
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.camera_alt, size: 20, color: Colors.white),
+                child: const Icon(
+                  Icons.camera_alt,
+                  size: 22,
+                  color: Colors.white,
+                ),
               ),
             ),
           ),
@@ -471,7 +490,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  const Icon(Icons.edit, size: 20),
+                  Icon(Icons.edit, size: 20, color: Colors.grey[600]),
                 ],
               ),
             )
@@ -497,7 +516,7 @@ class _ProfilePageState extends State<ProfilePage> {
                             : Colors.black,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 6),
                     const Icon(Icons.edit, size: 16),
                   ],
                 ),
@@ -583,7 +602,9 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Widget _buildActionSection() {
     if (_relationshipStatus == RelationshipStatus.pendingIncoming) {
-      return Row(children: [Expanded(child: _buildMessageButton())]);
+      return Row(
+        children: [Expanded(child: _buildMessageButton(isOutlined: false))],
+      );
     }
 
     return Row(
@@ -591,7 +612,7 @@ class _ProfilePageState extends State<ProfilePage> {
       children: [
         Expanded(child: _buildRelationshipButton()),
         const SizedBox(width: 12),
-        Expanded(child: _buildMessageButton()),
+        Expanded(child: _buildMessageButton(isOutlined: true)),
       ],
     );
   }
@@ -694,12 +715,7 @@ class _ProfilePageState extends State<ProfilePage> {
             onPressed: _isRelationshipActionInFlight
                 ? null
                 : _sendFriendRequest,
-            style: ElevatedButton.styleFrom(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-            ),
-            child: const Text('Add Friend'),
+            child: const Text('Add Friend'), // Uses global theme
           ),
         );
       case RelationshipStatus.pendingOutgoing:
@@ -710,11 +726,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 _isRelationshipActionInFlight || _pendingRequestId == null
                 ? null
                 : _cancelPendingRequest,
-            style: OutlinedButton.styleFrom(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-            ),
+            style: OutlinedButton.styleFrom(shape: const StadiumBorder()),
             icon: const Icon(Icons.hourglass_bottom, size: 18),
             label: const Text('Cancel Request'),
           ),
@@ -726,11 +738,7 @@ class _ProfilePageState extends State<ProfilePage> {
           height: height,
           child: OutlinedButton.icon(
             onPressed: _isRelationshipActionInFlight ? null : _confirmUnfriend,
-            style: OutlinedButton.styleFrom(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-            ),
+            style: OutlinedButton.styleFrom(shape: const StadiumBorder()),
             icon: const Icon(Icons.check, size: 18),
             label: const Text('Friends'),
           ),
@@ -764,18 +772,24 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  Widget _buildMessageButton() {
+  Widget _buildMessageButton({required bool isOutlined}) {
+    if (isOutlined) {
+      return SizedBox(
+        height: 40,
+        child: OutlinedButton.icon(
+          onPressed: _startChat,
+          icon: const Icon(Icons.message_outlined, size: 18),
+          label: const Text('Message'),
+          style: OutlinedButton.styleFrom(shape: const StadiumBorder()),
+        ),
+      );
+    }
     return SizedBox(
       height: 40,
-      child: OutlinedButton.icon(
+      child: ElevatedButton.icon(
         onPressed: _startChat,
         icon: const Icon(Icons.message_outlined, size: 18),
         label: const Text('Message'),
-        style: OutlinedButton.styleFrom(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-        ),
       ),
     );
   }
@@ -1769,6 +1783,19 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
               ),
             ),
+            // Appearance / Theme
+            ListTile(
+              leading: const Icon(Icons.brightness_6_outlined),
+              title: const Text('Appearance'),
+              subtitle: Text(() {
+                final m = ThemeController.instance.mode.value;
+                return m == ThemeMode.system
+                    ? 'Use system'
+                    : (m == ThemeMode.light ? 'Light' : 'Dark');
+              }()),
+              onTap: () => _showAppearanceSheet(context),
+            ),
+            const Divider(height: 1),
             ListTile(
               //let ne
               leading: Icon(Icons.logout, color: Colors.red),
@@ -1816,6 +1843,52 @@ class _ProfilePageState extends State<ProfilePage> {
                 ],
               ),
             ),
+    );
+  }
+
+  void _showAppearanceSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      builder: (sheetContext) {
+        final current = ThemeController.instance.mode.value;
+        void select(ThemeMode m) {
+          ThemeController.instance.setMode(m);
+          Navigator.pop(sheetContext);
+        }
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(
+                title: Text(
+                  'Appearance',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              RadioListTile<ThemeMode>(
+                title: const Text('Use system'),
+                value: ThemeMode.system,
+                groupValue: current,
+                onChanged: (m) => select(ThemeMode.system),
+              ),
+              RadioListTile<ThemeMode>(
+                title: const Text('Light'),
+                value: ThemeMode.light,
+                groupValue: current,
+                onChanged: (m) => select(ThemeMode.light),
+              ),
+              RadioListTile<ThemeMode>(
+                title: const Text('Dark'),
+                value: ThemeMode.dark,
+                groupValue: current,
+                onChanged: (m) => select(ThemeMode.dark),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 

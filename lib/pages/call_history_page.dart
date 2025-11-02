@@ -256,13 +256,14 @@ class _CallHistoryPageState extends State<CallHistoryPage> {
   }
 
   Color _callColor(CallModel call) {
+    final theme = Theme.of(context);
     if (call.status == 'cancelled' || call.status == 'rejected') {
       return Colors.grey;
     }
     if (call.status == 'missed') {
-      return Colors.red;
+      return theme.colorScheme.error;
     }
-    return Colors.green;
+    return const Color(0xFF50E3C2); // Accent Green
   }
 
   // ✅ Helper: Format time

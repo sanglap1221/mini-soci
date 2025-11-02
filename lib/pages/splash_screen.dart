@@ -76,7 +76,7 @@ class _SplashScreenState extends State<SplashScreen> {
                       child: CircularProgressIndicator(strokeWidth: 4),
                     ),
                     SizedBox(height: 16),
-                    Text('Starting app...'),
+                    Text('Loading UI...'),
                   ],
                 )
               : Column(

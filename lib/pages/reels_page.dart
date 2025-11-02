@@ -235,10 +235,10 @@ class _ReelsPageState extends State<ReelsPage> {
                     begin: Alignment.bottomCenter,
                     end: Alignment.topCenter,
                     colors: [
-                      Colors.black.withValues(alpha: 0.65),
-                      Colors.black.withValues(alpha: 0.1),
+                      Colors.black.withOpacity(0.65),
+                      Colors.black.withOpacity(0.1),
                     ],
-                    stops: const [0.0, 0.7],
+                    stops: [0.0, 0.7],
                   ),
                 ),
               ),
@@ -299,7 +299,9 @@ class _ReelsPageState extends State<ReelsPage> {
               children: [
                 _buildVerticalAction(
                   icon: isLiked ? Icons.favorite : Icons.favorite_border,
-                  color: isLiked ? Colors.redAccent : Colors.white,
+                  color: isLiked
+                      ? Theme.of(context).colorScheme.error
+                      : Colors.white,
                   label: '$likeCount',
                   onTap: () => _toggleLike(reel),
                   isBusy: isLikeLoading,
@@ -501,7 +503,7 @@ class _ReelsPageState extends State<ReelsPage> {
       setState(() {
         _postInteractions[postId] = currentState.copyWith(isLikeLoading: false);
         _updatePostInteractionFieldsInList(
-          postId,
+          postId!,
           likeCount: currentState.likeCount,
           isLiked: currentState.isLiked,
         );
@@ -1130,7 +1132,7 @@ class _ReelVideoPlayerState extends State<ReelVideoPlayer>
               child: Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.5),
+                  color: Colors.black.withOpacity(0.5),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(

@@ -12,6 +12,12 @@
 .swiftpm/
 migrate_working_dir/
 
+# Local environment
+.env
+.env.*
+*.local
+*.secrets.json
+
 # IntelliJ related
 *.iml
 *.ipr
@@ -27,11 +33,22 @@ migrate_working_dir/
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
+.flutter-plugins
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
 /build/
 /coverage/
+.metadata
+.packages
+
+# Platform-specific build output
+ios/Flutter/Flutter.podspec
+ios/Flutter/ephemeral/
+macos/Flutter/ephemeral/
+linux/build/
+windows/flutter/ephemeral/
+web/.dart_tool/
 
 # Symbolication related
 app.*.symbols
@@ -43,3 +60,17 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android local settings
+android/local.properties
+
+# Firebase & secrets (keep private when sharing)
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+lib/firebase_options.dart
+
+# Signing keys
+*.keystore
+*.jks
+*.p12
+*.pem

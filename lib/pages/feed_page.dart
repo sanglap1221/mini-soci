@@ -251,12 +251,11 @@ class _FeedPageState extends State<FeedPage> {
                   );
                 },
                 child: Container(
-                  height: 36,
+                  height: 40,
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   decoration: BoxDecoration(
-                    color: Colors.grey[100],
+                    color: Colors.grey[200],
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.grey[300]!),
                   ),
                   child: Row(
                     children: [
@@ -281,7 +280,10 @@ class _FeedPageState extends State<FeedPage> {
       ),
       body: RefreshIndicator(
         onRefresh: () => _loadPosts(forceRefresh: true),
-        child: _buildBody(),
+        child: NotificationListener<ScrollNotification>(
+          onNotification: _onScrollNotification,
+          child: _buildBody(),
+        ),
       ),
     );
   }
@@ -420,13 +422,13 @@ class _FeedPageState extends State<FeedPage> {
         final displayName = _resolveUsername(post);
 
         return Card(
-          margin: EdgeInsets.all(8),
+          // The theme handles margin and shape
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Post header with author info and menu
               Padding(
-                padding: EdgeInsets.all(8),
+                padding: const EdgeInsets.fromLTRB(12, 12, 8, 8),
                 child: Row(
                   children: [
                     // Author avatar
@@ -496,8 +498,14 @@ class _FeedPageState extends State<FeedPage> {
               _buildPostMedia(context, post),
               // Post caption
               Padding(
-                padding: EdgeInsets.all(8),
-                child: Text(post['caption'] ?? ''),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12.0,
+                  vertical: 8.0,
+                ),
+                child: Text(
+                  post['caption'] ?? '',
+                  style: const TextStyle(fontSize: 14),
+                ),
               ),
               const Divider(height: 1),
               _buildPostFooter(post),
@@ -505,6 +513,7 @@ class _FeedPageState extends State<FeedPage> {
           ),
         );
       },
+      padding: const EdgeInsets.fromLTRB(0, 4, 0, 80),
     );
   }
 
@@ -739,7 +748,7 @@ class _FeedPageState extends State<FeedPage> {
     final isLiked = interaction?.isLiked ?? _readIsLiked(post) ?? false;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       child: Row(
         children: [
           _buildFooterAction(
@@ -788,15 +797,23 @@ class _FeedPageState extends State<FeedPage> {
     required Color? color,
     required String label,
     required VoidCallback? onTap,
+    bool isBusy = false,
   }) {
     return InkWell(
-      onTap: onTap,
+      onTap: isBusy ? null : onTap,
       borderRadius: BorderRadius.circular(24),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         child: Row(
           children: [
-            Icon(icon, size: 20, color: color),
+            if (isBusy)
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              Icon(icon, size: 20, color: color),
             const SizedBox(width: 6),
             Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
           ],
@@ -1227,6 +1244,12 @@ class _FeedPageState extends State<FeedPage> {
   }
 
   int _clampNonNegative(int value) => value < 0 ? 0 : value;
+
+  bool _onScrollNotification(ScrollNotification notification) {
+    // This logic is now handled in homepage.dart, but keeping a stub here
+    // in case you want to add feed-specific scroll logic later.
+    return false;
+  }
 }
 
 class FeedVideoPlayer extends StatefulWidget {
