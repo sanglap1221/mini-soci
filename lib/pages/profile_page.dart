@@ -711,11 +711,19 @@ class _ProfilePageState extends State<ProfilePage> {
       case RelationshipStatus.none:
         return SizedBox(
           height: height,
-          child: ElevatedButton(
+          child: ElevatedButton.icon(
             onPressed: _isRelationshipActionInFlight
                 ? null
                 : _sendFriendRequest,
-            child: const Text('Add Friend'), // Uses global theme
+            style: ElevatedButton.styleFrom(
+              shape: const StadiumBorder(),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            ),
+            icon: const Icon(Icons.person_add, size: 18),
+            label: const Text(
+              'Add Friend',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            ),
           ),
         );
       case RelationshipStatus.pendingOutgoing:
@@ -726,9 +734,12 @@ class _ProfilePageState extends State<ProfilePage> {
                 _isRelationshipActionInFlight || _pendingRequestId == null
                 ? null
                 : _cancelPendingRequest,
-            style: OutlinedButton.styleFrom(shape: const StadiumBorder()),
+            style: OutlinedButton.styleFrom(
+              shape: const StadiumBorder(),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            ),
             icon: const Icon(Icons.hourglass_bottom, size: 18),
-            label: const Text('Cancel Request'),
+            label: const Text('Cancel Request', style: TextStyle(fontSize: 13)),
           ),
         );
       case RelationshipStatus.pendingIncoming:
@@ -738,9 +749,12 @@ class _ProfilePageState extends State<ProfilePage> {
           height: height,
           child: OutlinedButton.icon(
             onPressed: _isRelationshipActionInFlight ? null : _confirmUnfriend,
-            style: OutlinedButton.styleFrom(shape: const StadiumBorder()),
+            style: OutlinedButton.styleFrom(
+              shape: const StadiumBorder(),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            ),
             icon: const Icon(Icons.check, size: 18),
-            label: const Text('Friends'),
+            label: const Text('Friends', style: TextStyle(fontSize: 14)),
           ),
         );
     }

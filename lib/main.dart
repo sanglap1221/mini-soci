@@ -11,8 +11,9 @@ const Color primaryText = Color(0xFF333333);
 const Color secondaryText = Color(0xFF8A8A8F);
 const Color lightGrayBorder = Color(0xFFEAEAEA);
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await ThemeController.instance.load();
   runApp(const MyApp());
 }
 
@@ -104,6 +105,13 @@ class MyApp extends StatelessWidget {
             elevation: 0,
             surfaceTintColor: Colors.transparent,
             centerTitle: true,
+            backgroundColor: Colors.transparent,
+            foregroundColor: Colors.white,
+            titleTextStyle: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           cardTheme: CardThemeData(
             elevation: 0,
@@ -127,11 +135,22 @@ class MyApp extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
               borderSide: BorderSide(color: primaryBlue, width: 1.5),
             ),
+            hintStyle: const TextStyle(color: Colors.white70),
+            labelStyle: const TextStyle(color: Colors.white70),
+            prefixIconColor: Colors.white70,
+            suffixIconColor: Colors.white70,
+            iconColor: Colors.white70,
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 16,
               vertical: 14,
             ),
           ),
+          textSelectionTheme: const TextSelectionThemeData(
+            cursorColor: Colors.white,
+            selectionColor: Color(0x80FFFFFF),
+            selectionHandleColor: Colors.white,
+          ),
+          iconTheme: const IconThemeData(color: Colors.white70),
           elevatedButtonTheme: ElevatedButtonThemeData(
             style: ElevatedButton.styleFrom(
               backgroundColor: primaryBlue,

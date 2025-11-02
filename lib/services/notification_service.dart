@@ -178,6 +178,17 @@ class NotificationService {
   }
 
   Future<void> _showLocalNotification(RemoteMessage message) async {
+    // DON'T show notification if the current user is the sender
+    final currentUserId = getCurrentUserId();
+    final senderId = message.data['senderId'] as String?;
+
+    if (currentUserId != null &&
+        senderId != null &&
+        currentUserId == senderId) {
+      print('Skipping notification: current user is the sender');
+      return;
+    }
+
     // Determine notification type and channel
     final notificationType = message.data['type'] ?? 'chat_message';
     String channelId;
@@ -243,9 +254,22 @@ class NotificationService {
       payload = '$type|${message.data['callId']}';
     }
 
+    // Extract sender name from data or notification title
+    String notificationTitle =
+        message.notification?.title ?? 'New Notification';
+    final senderName = message.data['senderName'] as String?;
+    final senderUsername = message.data['senderUsername'] as String?;
+
+    // If backend provides senderName/senderUsername, use it; otherwise use notification title
+    if (senderName != null && senderName.isNotEmpty) {
+      notificationTitle = senderName;
+    } else if (senderUsername != null && senderUsername.isNotEmpty) {
+      notificationTitle = senderUsername;
+    }
+
     await _localNotifications.show(
       message.hashCode,
-      message.notification?.title ?? 'New Notification',
+      notificationTitle,
       message.notification?.body ?? '',
       details,
       payload: payload,

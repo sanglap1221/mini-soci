@@ -70,12 +70,11 @@ class _SearchPageState extends State<SearchPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Search Users'),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 1,
+        elevation: isDark ? 0 : 1,
       ),
       body: Column(
         children: [
@@ -84,12 +83,22 @@ class _SearchPageState extends State<SearchPage> {
             padding: const EdgeInsets.all(16.0),
             child: TextField(
               controller: _searchController,
+              style: TextStyle(color: isDark ? Colors.white : Colors.black87),
               decoration: InputDecoration(
                 hintText: 'Search by name or username...',
-                prefixIcon: const Icon(Icons.search, color: Colors.grey),
+                hintStyle: TextStyle(
+                  color: isDark ? Colors.white70 : Colors.grey[600],
+                ),
+                prefixIcon: Icon(
+                  Icons.search,
+                  color: isDark ? Colors.white70 : Colors.grey,
+                ),
                 suffixIcon: _searchController.text.isNotEmpty
                     ? IconButton(
-                        icon: const Icon(Icons.clear, color: Colors.grey),
+                        icon: Icon(
+                          Icons.clear,
+                          color: isDark ? Colors.white70 : Colors.grey,
+                        ),
                         onPressed: () {
                           _searchController.clear();
                           _performSearch('');
@@ -97,7 +106,7 @@ class _SearchPageState extends State<SearchPage> {
                       )
                     : null,
                 filled: true,
-                fillColor: Colors.grey[100],
+                fillColor: isDark ? const Color(0xFF1F2937) : Colors.grey[100],
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(30),
                   borderSide: BorderSide.none,
@@ -226,6 +235,7 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Widget _buildUserTile(Map<String, dynamic> user) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final userId = user['id'] as String? ?? user['userId'] as String? ?? '';
     final username = user['username'] as String? ?? 'Unknown User';
 
@@ -280,7 +290,10 @@ class _SearchPageState extends State<SearchPage> {
         children: [
           Text(
             '@$username',
-            style: TextStyle(color: Colors.grey[600], fontSize: 14),
+            style: TextStyle(
+              color: isDark ? Colors.white70 : Colors.grey[600],
+              fontSize: 14,
+            ),
           ),
           if (bio != null && bio.isNotEmpty) ...[
             const SizedBox(height: 4),
@@ -288,12 +301,18 @@ class _SearchPageState extends State<SearchPage> {
               bio,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: Colors.grey[500], fontSize: 13),
+              style: TextStyle(
+                color: isDark ? Colors.white60 : Colors.grey[500],
+                fontSize: 13,
+              ),
             ),
           ],
         ],
       ),
-      trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+      trailing: Icon(
+        Icons.chevron_right,
+        color: isDark ? Colors.white70 : Colors.grey,
+      ),
       onTap: () => _navigateToProfile(userId),
     );
   }
