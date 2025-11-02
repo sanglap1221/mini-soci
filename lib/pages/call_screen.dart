@@ -168,9 +168,24 @@ class _CallScreenState extends State<CallScreen> {
         setState(() {
           _isInitialized = true;
         });
-        // Ensure speakerphone is on by default for better audio output on most devices
-        // (useful for video calls and loudspeaker audio). User can toggle later.
-        await _webrtcHelper.setSpeakerphoneOn(true);
+        // Route audio based on call type:
+        // - Video calls: enable speakerphone by default
+        // - Audio calls: keep speakerphone off by default (earpiece)
+        if (widget.isVideoCall) {
+          await _webrtcHelper.setSpeakerphoneOn(true);
+          if (mounted) {
+            setState(() {
+              _isSpeakerOn = true;
+            });
+          }
+        } else {
+          await _webrtcHelper.setSpeakerphoneOn(false);
+          if (mounted) {
+            setState(() {
+              _isSpeakerOn = false;
+            });
+          }
+        }
       }
     } catch (e) {
       debugPrint('WebRTC initialization failed: $e');

@@ -242,57 +242,85 @@ class _IncomingCallListenerState extends State<IncomingCallListener> {
           ),
           actionsAlignment: MainAxisAlignment.spaceEvenly,
           actions: [
-            TextButton.icon(
-              onPressed: () async {
-                final messenger = ScaffoldMessenger.of(context);
-                try {
-                  await _callService.rejectCall(call.callId);
-                } on FirebaseException catch (error) {
-                  final message =
-                      error.message ??
-                      'Unable to reject call. Please try again.';
-                  messenger.showSnackBar(SnackBar(content: Text(message)));
-                } finally {
-                  _stopSystemRingtone();
-                  if (mounted) {
-                    Navigator.of(context, rootNavigator: true).maybePop();
-                  }
-                }
-              },
-              icon: const Icon(Icons.call_end, color: Colors.red),
-              label: const Text('Reject', style: TextStyle(color: Colors.red)),
+            // Reject circular button with label
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                RawMaterialButton(
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    try {
+                      await _callService.rejectCall(call.callId);
+                    } on FirebaseException catch (error) {
+                      final message =
+                          error.message ??
+                          'Unable to reject call. Please try again.';
+                      messenger.showSnackBar(SnackBar(content: Text(message)));
+                    } finally {
+                      _stopSystemRingtone();
+                      if (mounted) {
+                        Navigator.of(context, rootNavigator: true).maybePop();
+                      }
+                    }
+                  },
+                  fillColor: Colors.red.shade600,
+                  elevation: 2,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 64,
+                    height: 64,
+                  ),
+                  shape: const CircleBorder(),
+                  child: const Icon(Icons.call_end, color: Colors.white),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Reject',
+                  style: TextStyle(fontSize: 12, color: Colors.red),
+                ),
+              ],
             ),
-            ElevatedButton.icon(
-              onPressed: () async {
-                await _callService.acceptCall(call.callId);
-                _stopSystemRingtone();
+            // Accept circular button with label
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                RawMaterialButton(
+                  onPressed: () async {
+                    await _callService.acceptCall(call.callId);
+                    _stopSystemRingtone();
 
-                Navigator.of(
-                  dialogContext,
-                ).pop(); // Dismiss this specific dialog
-                if (context.mounted) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => CallScreen(
-                        callId: call.callId,
-                        callerId: call.callerId,
-                        receiverId: _currentUserId!,
-                        isInitiator: false,
-                        otherUserName: callerName,
-                        isVideoCall: call.isVideoCall,
-                        otherUserAvatarUrl: callerAvatar,
-                      ),
-                    ),
-                  );
-                }
-              },
-              icon: const Icon(Icons.call),
-              label: const Text('Accept'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-              ),
+                    Navigator.of(dialogContext).pop(); // Dismiss dialog
+                    if (context.mounted) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => CallScreen(
+                            callId: call.callId,
+                            callerId: call.callerId,
+                            receiverId: _currentUserId!,
+                            isInitiator: false,
+                            otherUserName: callerName,
+                            isVideoCall: call.isVideoCall,
+                            otherUserAvatarUrl: callerAvatar,
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                  fillColor: Colors.green.shade600,
+                  elevation: 2,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 64,
+                    height: 64,
+                  ),
+                  shape: const CircleBorder(),
+                  child: const Icon(Icons.call, color: Colors.white),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Accept',
+                  style: TextStyle(fontSize: 12, color: Colors.green),
+                ),
+              ],
             ),
           ],
         );
