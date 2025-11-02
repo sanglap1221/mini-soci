@@ -14,6 +14,8 @@ import 'package:pay_go/widgets/comments_sheet.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter/gestures.dart';
 import 'package:video_player/video_player.dart';
+import 'package:flutter/scheduler.dart';
+import 'package:pay_go/services/feature_registration.dart';
 import 'notifications_page.dart';
 import 'profile_page.dart';
 import 'search_page.dart';
@@ -44,6 +46,21 @@ class _FeedPageState extends State<FeedPage> {
   void initState() {
     super.initState();
     debugPrint('FeedPage initState called');
+    // Show the feed quickly, then initialize background features after first frame
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      // fire-and-forget background registration with telemetry
+      final sw = Stopwatch()..start();
+      registerBackgroundFeatures()
+          .then((_) {
+            debugPrint(
+              'Background features registered in ${sw.elapsedMilliseconds} ms',
+            );
+          })
+          .catchError((e) {
+            debugPrint('Background registration failed: $e');
+          });
+    });
+
     _listenForUserUpdates();
     _loadPosts();
   }

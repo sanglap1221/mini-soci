@@ -10,7 +10,7 @@ import 'call_history_detail_page.dart';
 import 'call_screen.dart';
 
 class CallHistoryPage extends StatefulWidget {
-  const CallHistoryPage({Key? key}) : super(key: key);
+  const CallHistoryPage({super.key});
 
   @override
   State<CallHistoryPage> createState() => _CallHistoryPageState();
@@ -366,7 +366,7 @@ class _CallHistoryPageState extends State<CallHistoryPage> {
     if (hours > 0) {
       return '${hours}h ${minutes}m';
     }
-    return '${minutes}:${seconds.toString().padLeft(2, '0')}';
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
   String _resolveDisplayName(

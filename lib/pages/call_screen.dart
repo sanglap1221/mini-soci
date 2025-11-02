@@ -45,6 +45,7 @@ class _CallScreenState extends State<CallScreen> {
   bool _isClosing = false; // Flag to prevent multiple pops
   final ApiService _apiService = ApiService();
   Timer? _callTimer;
+  Stopwatch? _callStopwatch;
   Duration _callDuration = Duration.zero;
   String _callStatus = 'Connecting...';
 
@@ -163,14 +164,25 @@ class _CallScreenState extends State<CallScreen> {
         }
       },
     );
-    await _webrtcHelper.initialize();
-    if (mounted) {
-      setState(() {
-        _isInitialized = true;
-      });
-      if (!widget.isInitiator) {
-        _webrtcHelper.setSpeakerphoneOn(widget.isVideoCall);
+    try {
+      await _webrtcHelper.initialize();
+      if (mounted) {
+        setState(() {
+          _isInitialized = true;
+        });
+        // Ensure speakerphone is on by default for better audio output on most devices
+        // (useful for video calls and loudspeaker audio). User can toggle later.
+        await _webrtcHelper.setSpeakerphoneOn(true);
       }
+    } catch (e) {
+      debugPrint('WebRTC initialization failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to initialize call: $e')),
+        );
+        Navigator.of(context).pop();
+      }
+      return;
     }
   }
 
@@ -232,14 +244,17 @@ class _CallScreenState extends State<CallScreen> {
 
   void _startCallTimer() {
     _callTimer?.cancel();
-    _callTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    _callStopwatch?.stop();
+    _callStopwatch = Stopwatch()..start();
+    _callTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
       if (!mounted) {
         timer.cancel();
+        _callStopwatch?.stop();
         return;
       }
-      setState(
-        () => _callDuration = Duration(seconds: _callDuration.inSeconds + 1),
-      );
+      setState(() {
+        _callDuration = _callStopwatch?.elapsed ?? Duration.zero;
+      });
     });
   }
 

@@ -3,6 +3,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async';
 import 'call_service.dart';
+import '../utils/permissions_helper.dart';
 
 class WebRTCHelper {
   final RTCVideoRenderer localRenderer = RTCVideoRenderer();
@@ -70,8 +71,26 @@ class WebRTCHelper {
           : false,
     };
 
-    _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-    localRenderer.srcObject = _localStream;
+    // Ensure we have microphone/camera permissions before attempting to getUserMedia
+    try {
+      final hasPerms = await PermissionsHelper.hasCallPermissions();
+      if (!hasPerms) {
+        final granted = await PermissionsHelper.requestCallPermissions();
+        if (!granted) {
+          debugPrint('User denied call permissions (camera/microphone)');
+          // Leave without throwing to allow caller to handle state update
+          return;
+        }
+      }
+
+      _localStream = await navigator.mediaDevices.getUserMedia(
+        mediaConstraints,
+      );
+      localRenderer.srcObject = _localStream;
+    } catch (e) {
+      debugPrint('getUserMedia failed: $e');
+      rethrow;
+    }
   }
 
   Future<void> _createPeerConnection() async {

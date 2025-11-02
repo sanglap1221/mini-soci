@@ -148,7 +148,7 @@ class CallHistoryDetailPage extends StatelessWidget {
     if (hours > 0) {
       return '${hours}h ${minutes}m';
     }
-    return '${minutes}:${seconds.toString().padLeft(2, '0')}';
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
   Color _statusColor(String status) {

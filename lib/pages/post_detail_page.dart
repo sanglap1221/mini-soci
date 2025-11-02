@@ -418,7 +418,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12.0),
       child: Text(
-        '${_likeCount} ${_likeCount == 1 ? 'like' : 'likes'}',
+        '$_likeCount ${_likeCount == 1 ? 'like' : 'likes'}',
         style: const TextStyle(fontWeight: FontWeight.bold),
       ),
     );
