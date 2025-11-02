@@ -1406,9 +1406,10 @@ class ApiService {
     Map<String, dynamic>? jsonBody,
     List<int> acceptedStatus = const [200],
     bool parseJson = true,
+    bool isRetry = false,
   }) async {
     final instance = ApiService();
-    final token = await instance.getFirebaseToken();
+    final token = await instance.getFirebaseToken(forceRefresh: isRetry);
     if (token == null) throw Exception('Not authenticated');
     final base = await instance._prepareBaseUrl();
 
@@ -1455,6 +1456,28 @@ class ApiService {
     _log('${method.name.toUpperCase()} $uri => ${response.statusCode}');
     if (response.body.isNotEmpty) {
       _log('Response Body: ${response.body}');
+    }
+
+    // Handle 401 Unauthorized - retry once with fresh token
+    if (response.statusCode == 401 && !isRetry) {
+      _log('Got 401, refreshing token and retrying...');
+      
+      // Small delay to ensure Firebase processes the token refresh
+      await Future.delayed(const Duration(milliseconds: 100));
+      
+      return _authorizedRequest(
+        method,
+        path,
+        queryParameters: queryParameters,
+        jsonBody: jsonBody,
+        acceptedStatus: acceptedStatus,
+        parseJson: parseJson,
+        isRetry: true,
+      );
+    }
+    
+    if (response.statusCode == 401 && isRetry) {
+      _log('⚠️ Still got 401 after token refresh. Token might be invalid or backend issue.');
     }
 
     if (!acceptedStatus.contains(response.statusCode)) {

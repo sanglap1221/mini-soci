@@ -41,10 +41,14 @@ class BaseUrlResolver {
   );
 
   // Environment defaults.
-  static const String _androidEmulatorDefault = 'http://10.0.2.2:3000/api';
-  static const String _androidPhysicalDefault = 'http://localhost:3000/api';
-  static const String _iosSimulatorDefault = 'http://localhost:3000/api';
-  static const String _desktopDefault = 'http://localhost:3000/api';
+  static const String _androidEmulatorDefault =
+      'https://mini-soco-backend-25l2.onrender.com/api';
+  static const String _androidPhysicalDefault =
+      'https://mini-soco-backend-25l2.onrender.com/api';
+  static const String _iosSimulatorDefault =
+      'https://mini-soco-backend-25l2.onrender.com/api';
+  static const String _desktopDefault =
+      'https://mini-soco-backend-25l2.onrender.com/api';
   static const Duration _probeTimeout = Duration(seconds: 2);
   static const String _prefsKeyLastKnownBaseUrl = 'api_service.last_base_url';
 
