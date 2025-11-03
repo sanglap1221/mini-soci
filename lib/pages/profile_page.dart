@@ -469,6 +469,7 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget _buildProfileHeader() {
     final username = _userData?['username'] ?? 'Username';
     final bio = _userData?['bio'] as String?;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Padding(
       padding: const EdgeInsets.all(16.0),
@@ -511,9 +512,9 @@ class _ProfilePageState extends State<ProfilePage> {
                       bio?.isNotEmpty == true ? bio! : 'Tap to add bio',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: bio == null || bio.isEmpty
-                            ? Colors.grey
-                            : Colors.black,
+                        color: (bio == null || bio.isEmpty)
+                            ? (isDark ? Colors.white60 : Colors.grey)
+                            : (isDark ? Colors.white : Colors.black),
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -528,7 +529,9 @@ class _ProfilePageState extends State<ProfilePage> {
               child: Text(
                 bio?.isNotEmpty == true ? bio! : 'No bio available.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey[600]),
+                style: TextStyle(
+                  color: isDark ? Colors.white70 : Colors.grey[600],
+                ),
               ),
             ),
           _buildFriendCountRow(),
@@ -601,19 +604,41 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Widget _buildActionSection() {
-    if (_relationshipStatus == RelationshipStatus.pendingIncoming) {
-      return Row(
-        children: [Expanded(child: _buildMessageButton(isOutlined: false))],
-      );
-    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 360;
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Expanded(child: _buildRelationshipButton()),
-        const SizedBox(width: 12),
-        Expanded(child: _buildMessageButton(isOutlined: true)),
-      ],
+        if (_relationshipStatus == RelationshipStatus.pendingIncoming) {
+          // Only show Message; make sure it fills width and doesn't collide
+          return SizedBox(
+            width: double.infinity,
+            child: _buildMessageButton(isOutlined: false),
+          );
+        }
+
+        if (narrow) {
+          // Stack vertically on narrow screens to avoid overlap between
+          // relationship button and message button.
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildRelationshipButton(),
+              const SizedBox(height: 10),
+              _buildMessageButton(isOutlined: true),
+            ],
+          );
+        }
+
+        // Default side-by-side
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Expanded(child: _buildRelationshipButton()),
+            const SizedBox(width: 12),
+            Expanded(child: _buildMessageButton(isOutlined: true)),
+          ],
+        );
+      },
     );
   }
 

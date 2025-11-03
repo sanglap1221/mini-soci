@@ -27,6 +27,10 @@ class _ChatListPageState extends State<ChatListPage> {
   final Map<String, String> _usernameOverrides = <String, String>{};
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _userSubscription;
 
+  // Search state
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+
   String _getChatId(String currentUserId, String otherUserId) {
     final ids = [currentUserId, otherUserId];
     ids.sort();
@@ -72,11 +76,18 @@ class _ChatListPageState extends State<ChatListPage> {
   void initState() {
     super.initState();
     _listenForUserUpdates();
+    _searchController.addListener(() {
+      final q = _searchController.text.trim();
+      if (q != _searchQuery) {
+        setState(() => _searchQuery = q);
+      }
+    });
   }
 
   @override
   void dispose() {
     _userSubscription?.cancel();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -92,170 +103,236 @@ class _ChatListPageState extends State<ChatListPage> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Chats')),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: _firestore
-            .collection('chats')
-            .where('participants', arrayContains: currentUser.uid)
-            .orderBy('lastMessageTime', descending: true)
-            .snapshots(),
-        builder: (context, chatSnapshot) {
-          if (chatSnapshot.hasError) {
-            return _buildStatusMessage(
-              icon: Icons.error_outline,
-              message: 'Something went wrong loading chats.',
-            );
-          }
-
-          if (chatSnapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          final chatDocs = chatSnapshot.data?.docs ?? [];
-          final Map<String, Map<String, dynamic>> chatDataByUserId = {};
-
-          for (final doc in chatDocs) {
-            final data = doc.data();
-            final participants = (data['participants'] as List<dynamic>?)
-                ?.whereType<String>()
-                .toList();
-            if (participants == null || participants.isEmpty) {
-              continue;
-            }
-
-            final otherId = _otherParticipantId(currentUser.uid, participants);
-            if (otherId == null) continue;
-            chatDataByUserId[otherId] = data;
-          }
-
-          final otherUserIds = chatDataByUserId.keys.toList();
-          if (otherUserIds.isEmpty) {
-            return _buildStatusMessage(
-              icon: Icons.chat_bubble_outline,
-              message: 'You can start a conversation.',
-            );
-          }
-
-          return FutureBuilder<
-            Map<String, QueryDocumentSnapshot<Map<String, dynamic>>>
-          >(
-            future: _fetchUsersByIds(otherUserIds),
-            builder: (context, userSnapshot) {
-              if (userSnapshot.hasError) {
-                return _buildStatusMessage(
-                  icon: Icons.error_outline,
-                  message: 'Something went wrong loading user data.',
-                );
-              }
-
-              if (userSnapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              final userById = userSnapshot.data ?? {};
-
-              // Create a list of all users, prioritizing those with active chats.
-              final allUsers = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-              final seenUserIds = <String>{};
-
-              for (final userId in chatDataByUserId.keys) {
-                if (userById.containsKey(userId) &&
-                    !seenUserIds.contains(userId)) {
-                  allUsers.add(userById[userId]!);
-                  seenUserIds.add(userId);
+      body: Column(
+        children: [
+          _buildSearchBar(context),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: _firestore
+                  .collection('chats')
+                  .where('participants', arrayContains: currentUser.uid)
+                  .orderBy('lastMessageTime', descending: true)
+                  .snapshots(),
+              builder: (context, chatSnapshot) {
+                if (chatSnapshot.hasError) {
+                  return _buildStatusMessage(
+                    icon: Icons.error_outline,
+                    message: 'Something went wrong loading chats.',
+                  );
                 }
-              }
 
-              if (allUsers.isEmpty) {
-                return _buildStatusMessage(
-                  icon: Icons.chat_bubble_outline,
-                  message: 'You can start a conversation.',
-                );
-              }
+                if (chatSnapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
 
-              if (allUsers.isEmpty) {
-                return _buildStatusMessage(
-                  icon: Icons.chat_bubble_outline,
-                  message: 'You can start a conversation.',
-                );
-              }
+                final chatDocs = chatSnapshot.data?.docs ?? [];
+                final Map<String, Map<String, dynamic>> chatDataByUserId = {};
 
-              return ListView.builder(
-                itemCount: allUsers.length,
-                itemBuilder: (context, index) {
-                  final userDoc = allUsers[index];
-                  final userData = userDoc.data();
-                  final otherUserId = userDoc.id;
-                  final displayName = _resolveUsernameForUserDoc(
-                    userDoc.id,
-                    userData,
+                for (final doc in chatDocs) {
+                  final data = doc.data();
+                  final participants = (data['participants'] as List<dynamic>?)
+                      ?.whereType<String>()
+                      .toList();
+                  if (participants == null || participants.isEmpty) {
+                    continue;
+                  }
+
+                  final otherId = _otherParticipantId(
+                    currentUser.uid,
+                    participants,
                   );
+                  if (otherId == null) continue;
+                  chatDataByUserId[otherId] = data;
+                }
 
-                  final chatData = chatDataByUserId[otherUserId];
-                  final lastMessage =
-                      (chatData?['lastMessage'] as String?) ?? '';
-                  final lastMessageTimeText = _formatTimestamp(
-                    chatData?['lastMessageTime'],
+                final otherUserIds = chatDataByUserId.keys.toList();
+                if (otherUserIds.isEmpty) {
+                  return _buildStatusMessage(
+                    icon: Icons.chat_bubble_outline,
+                    message: 'You can start a conversation.',
                   );
-                  final participantsList =
-                      (chatData?['participants'] as List<dynamic>?)
-                          ?.whereType<String>()
-                          .toList();
+                }
 
-                  return ListTile(
-                    leading: _buildAvatarWidget(
-                      userId: otherUserId,
-                      userData: userData,
-                      displayName: displayName,
-                    ),
-                    trailing: lastMessageTimeText != null
-                        ? Text(
-                            lastMessageTimeText,
-                            style: TextStyle(
-                              color: Colors.grey[500],
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          )
-                        : Icon(
-                            Icons.chat_bubble_outline,
-                            color: Colors.grey[400],
-                            size: 20,
-                          ),
-                    title: Text(
-                      displayName,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _fallbackSubtitle(lastMessage),
-                          style: _getSubtitleStyle(lastMessage),
-                        ),
-                      ],
-                    ),
-                    onTap: () {
-                      final chatId = _getChatId(currentUser.uid, otherUserId);
-                      final resolvedParticipants =
-                          (participantsList != null &&
-                              participantsList.isNotEmpty)
-                          ? participantsList
-                          : [currentUser.uid, otherUserId];
-                      _openChat(
-                        chatId,
-                        otherUserId,
-                        participants: resolvedParticipants,
+                return FutureBuilder<
+                  Map<String, QueryDocumentSnapshot<Map<String, dynamic>>>
+                >(
+                  future: _fetchUsersByIds(otherUserIds),
+                  builder: (context, userSnapshot) {
+                    if (userSnapshot.hasError) {
+                      return _buildStatusMessage(
+                        icon: Icons.error_outline,
+                        message: 'Something went wrong loading user data.',
                       );
+                    }
+
+                    if (userSnapshot.connectionState ==
+                        ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    final userById = userSnapshot.data ?? {};
+
+                    // Create a list of all users, prioritizing those with active chats.
+                    final allUsers =
+                        <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+                    final seenUserIds = <String>{};
+
+                    for (final userId in chatDataByUserId.keys) {
+                      if (userById.containsKey(userId) &&
+                          !seenUserIds.contains(userId)) {
+                        allUsers.add(userById[userId]!);
+                        seenUserIds.add(userId);
+                      }
+                    }
+
+                    if (allUsers.isEmpty) {
+                      return _buildStatusMessage(
+                        icon: Icons.chat_bubble_outline,
+                        message: 'You can start a conversation.',
+                      );
+                    }
+
+                    if (allUsers.isEmpty) {
+                      return _buildStatusMessage(
+                        icon: Icons.chat_bubble_outline,
+                        message: 'You can start a conversation.',
+                      );
+                    }
+
+                    // Apply search filter on displayName or lastMessage
+                    List<QueryDocumentSnapshot<Map<String, dynamic>>> filtered =
+                        allUsers.where((doc) {
+                          final ud = doc.data();
+                          final name = _resolveUsernameForUserDoc(doc.id, ud);
+                          final cd = chatDataByUserId[doc.id];
+                          final last = (cd?['lastMessage'] as String?) ?? '';
+                          return _matchesQuery(name) || _matchesQuery(last);
+                        }).toList();
+
+                    return ListView.builder(
+                      itemCount: allUsers.length,
+                      itemBuilder: (context, index) {
+                        final userDoc = (filtered.isNotEmpty
+                            ? filtered
+                            : allUsers)[index];
+                        final userData = userDoc.data();
+                        final otherUserId = userDoc.id;
+                        final displayName = _resolveUsernameForUserDoc(
+                          userDoc.id,
+                          userData,
+                        );
+
+                        final chatData = chatDataByUserId[otherUserId];
+                        final lastMessage =
+                            (chatData?['lastMessage'] as String?) ?? '';
+                        final lastMessageTimeText = _formatTimestamp(
+                          chatData?['lastMessageTime'],
+                        );
+                        final participantsList =
+                            (chatData?['participants'] as List<dynamic>?)
+                                ?.whereType<String>()
+                                .toList();
+
+                        return ListTile(
+                          leading: _buildAvatarWidget(
+                            userId: otherUserId,
+                            userData: userData,
+                            displayName: displayName,
+                          ),
+                          trailing: lastMessageTimeText != null
+                              ? Text(
+                                  lastMessageTimeText,
+                                  style: TextStyle(
+                                    color: Colors.grey[500],
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                )
+                              : Icon(
+                                  Icons.chat_bubble_outline,
+                                  color: Colors.grey[400],
+                                  size: 20,
+                                ),
+                          title: Text(
+                            displayName,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _fallbackSubtitle(lastMessage),
+                                style: _getSubtitleStyle(lastMessage),
+                              ),
+                            ],
+                          ),
+                          onTap: () {
+                            final chatId = _getChatId(
+                              currentUser.uid,
+                              otherUserId,
+                            );
+                            final resolvedParticipants =
+                                (participantsList != null &&
+                                    participantsList.isNotEmpty)
+                                ? participantsList
+                                : [currentUser.uid, otherUserId];
+                            _openChat(
+                              chatId,
+                              otherUserId,
+                              participants: resolvedParticipants,
+                            );
+                          },
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool _matchesQuery(String? text) {
+    if (_searchQuery.isEmpty) return true;
+    final t = (text ?? '').toLowerCase();
+    return t.contains(_searchQuery.toLowerCase());
+  }
+
+  Widget _buildSearchBar(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      child: SizedBox(
+        height: 44,
+        child: TextField(
+          controller: _searchController,
+          textInputAction: TextInputAction.search,
+          style: TextStyle(color: isDark ? Colors.white : null),
+          decoration: InputDecoration(
+            hintText: 'Search chats',
+            prefixIcon: const Icon(Icons.search),
+            suffixIcon: _searchQuery.isNotEmpty
+                ? IconButton(
+                    icon: const Icon(Icons.clear),
+                    onPressed: () {
+                      _searchController.clear();
+                      FocusScope.of(context).unfocus();
                     },
-                  );
-                },
-              );
-            },
-          );
-        },
+                  )
+                : null,
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
+          ),
+        ),
       ),
     );
   }

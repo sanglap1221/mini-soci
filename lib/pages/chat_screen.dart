@@ -163,7 +163,13 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
               const SizedBox(width: 8),
-              Text(_otherUserName),
+              Expanded(
+                child: Text(
+                  _otherUserName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ],
           ),
         ),

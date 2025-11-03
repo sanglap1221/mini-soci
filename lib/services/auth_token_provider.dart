@@ -32,8 +32,8 @@ class AuthTokenProvider {
       final token = await user.getIdToken(shouldRefresh);
       if (token != null) {
         _lastTokenRefresh = now;
-        final tokenPreview = token.length > 20 
-            ? '${token.substring(0, 20)}...' 
+        final tokenPreview = token.length > 20
+            ? '${token.substring(0, 20)}...'
             : token;
         _log('Token obtained: $tokenPreview (forceRefresh=$forceRefresh)');
       }

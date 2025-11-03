@@ -251,6 +251,19 @@ class ApiService {
 
   Future<String> _prepareBaseUrl() => _baseUrlResolver.prepareBaseUrl();
 
+  /// Returns the effective base URL used for API calls. Some deployments
+  /// expose the API under a '/api' prefix while others host it at the root.
+  /// This helper mirrors the normalization logic used by `_authorizedRequest`
+  /// so all internal callers build URIs consistently.
+  Future<String> _prepareEffectiveBaseUrl() async {
+    final base = await _prepareBaseUrl();
+    final b = base.trim();
+    if (b.isEmpty) return b;
+    if (b.endsWith('/api')) return b;
+    if (b.endsWith('/')) return '${b}api';
+    return '$b/api';
+  }
+
   Future<Map<String, dynamic>> createPost(
     String caption,
     File mediaFile, {
@@ -260,7 +273,7 @@ class ApiService {
     if (token == null) throw Exception('Not authenticated');
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) throw Exception('Not authenticated');
-    final resolvedBaseUrl = await _prepareBaseUrl();
+    final resolvedBaseUrl = await _prepareEffectiveBaseUrl();
 
     final ext = mediaFile.path.split('.').last.toLowerCase();
 
@@ -811,7 +824,7 @@ class ApiService {
 
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) throw Exception('Not authenticated');
-    final resolvedBaseUrl = await _prepareBaseUrl();
+    final resolvedBaseUrl = await _prepareEffectiveBaseUrl();
 
     final ext = imageFile.path.toLowerCase().split('.').last;
     if (!['jpg', 'jpeg', 'png'].contains(ext)) {
@@ -1413,7 +1426,24 @@ class ApiService {
     if (token == null) throw Exception('Not authenticated');
     final base = await instance._prepareBaseUrl();
 
-    final uri = Uri.parse('$base$path').replace(
+    // Some deployments expose API at the root (https://host) while others use a '/api' prefix
+    // Normalize here so callers can always pass paths like '/posts' and we'll target the
+    // correct server URL. If the resolved base already includes '/api' we keep it.
+    final effectiveBase = () {
+      try {
+        final b = base.trim();
+        if (b.isEmpty) return b;
+        if (b.endsWith('/api')) return b;
+        if (b.endsWith('/')) return '${b}api';
+        return '$b/api';
+      } catch (_) {
+        return base;
+      }
+    }();
+
+    _log('Using effective base URL: $effectiveBase');
+
+    final uri = Uri.parse('$effectiveBase$path').replace(
       queryParameters: queryParameters == null || queryParameters.isEmpty
           ? null
           : queryParameters,
@@ -1461,10 +1491,10 @@ class ApiService {
     // Handle 401 Unauthorized - retry once with fresh token
     if (response.statusCode == 401 && !isRetry) {
       _log('Got 401, refreshing token and retrying...');
-      
+
       // Small delay to ensure Firebase processes the token refresh
       await Future.delayed(const Duration(milliseconds: 100));
-      
+
       return _authorizedRequest(
         method,
         path,
@@ -1475,9 +1505,23 @@ class ApiService {
         isRetry: true,
       );
     }
-    
+
     if (response.statusCode == 401 && isRetry) {
-      _log('⚠️ Still got 401 after token refresh. Token might be invalid or backend issue.');
+      _log(
+        '⚠️ Still got 401 after token refresh. Token might be invalid or backend issue.',
+      );
+      try {
+        final payload = instance._parseJwtPayload(token);
+        if (payload != null) {
+          _log(
+            'Token payload claims: iss=${payload['iss']}, aud=${payload['aud']}, sub=${payload['sub']}, exp=${payload['exp']}',
+          );
+        } else {
+          _log('Unable to parse JWT payload for debugging');
+        }
+      } catch (e) {
+        _log('Error while parsing token payload: $e');
+      }
     }
 
     if (!acceptedStatus.contains(response.statusCode)) {
@@ -1505,6 +1549,23 @@ class ApiService {
   static void _log(String message) {
     if (kDebugMode) {
       debugPrint('ApiService: $message');
+    }
+  }
+
+  /// Try to parse the JWT payload (the middle segment) to a Map for
+  /// diagnostic logging. This does not validate the signature.
+  Map<String, dynamic>? _parseJwtPayload(String jwt) {
+    try {
+      final parts = jwt.split('.');
+      if (parts.length != 3) return null;
+      final payloadSegment = parts[1];
+      final normalized = base64Url.normalize(payloadSegment);
+      final decoded = utf8.decode(base64Url.decode(normalized));
+      final jsonMap = json.decode(decoded);
+      if (jsonMap is Map<String, dynamic>) return jsonMap;
+      return null;
+    } catch (_) {
+      return null;
     }
   }
 }
