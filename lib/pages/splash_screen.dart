@@ -116,13 +116,13 @@ class _SplashScreenState extends State<SplashScreen> {
 
       if (androidInfo.isPhysicalDevice) {
         candidates.addAll([
-          'https://mini-soco-backend-zv3b.onrender.com',
+          'https://mini-soco-backend-ea0m.onrender.com',
           'http://10.0.2.2:3000/api',
         ]);
       } else {
         candidates.addAll([
           'http://10.0.2.2:3000/api',
-          'https://mini-soco-backend-zv3b.onrender.com',
+          'https://mini-soco-backend-ea0m.onrender.com',
         ]);
       }
 

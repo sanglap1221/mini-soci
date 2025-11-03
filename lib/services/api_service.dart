@@ -275,6 +275,8 @@ class ApiService {
     if (currentUser == null) throw Exception('Not authenticated');
     final resolvedBaseUrl = await _prepareEffectiveBaseUrl();
 
+    _debugLogTokenClaims(token, context: 'createPost');
+
     final ext = mediaFile.path.split('.').last.toLowerCase();
 
     if (mediaType == PostMediaType.image) {
@@ -1492,6 +1494,20 @@ class ApiService {
     if (response.statusCode == 401 && !isRetry) {
       _log('Got 401, refreshing token and retrying...');
 
+      // Attempt to log token payload for debugging (debug builds only).
+      try {
+        final payload = instance._parseJwtPayload(token);
+        if (payload != null) {
+          _log(
+            '401 token payload before refresh: iss=${payload['iss']}, aud=${payload['aud']}, sub=${payload['sub']}, exp=${payload['exp']}',
+          );
+        } else {
+          _log('401 token payload: <unable to parse payload>');
+        }
+      } catch (e) {
+        _log('Failed to parse JWT payload for debug: $e');
+      }
+
       // Small delay to ensure Firebase processes the token refresh
       await Future.delayed(const Duration(milliseconds: 100));
 
@@ -1566,6 +1582,25 @@ class ApiService {
       return null;
     } catch (_) {
       return null;
+    }
+  }
+
+  void _debugLogTokenClaims(String token, {required String context}) {
+    if (!kDebugMode) {
+      return;
+    }
+
+    try {
+      final payload = _parseJwtPayload(token);
+      if (payload == null) {
+        _log('$context token claims: <unable to parse payload>');
+        return;
+      }
+      _log(
+        '$context token claims: iss=${payload['iss']}, aud=${payload['aud']}, sub=${payload['sub']}, exp=${payload['exp']}',
+      );
+    } catch (error) {
+      _log('Failed to decode token for $context: $error');
     }
   }
 }

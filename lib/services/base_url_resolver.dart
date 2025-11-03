@@ -42,13 +42,13 @@ class BaseUrlResolver {
 
   // Environment defaults.
   static const String _androidEmulatorDefault =
-      'https://mini-soco-backend-zv3b.onrender.com';
+      'https://mini-soco-backend-ea0m.onrender.com';
   static const String _androidPhysicalDefault =
-      'https://mini-soco-backend-zv3b.onrender.com';
+      'https://mini-soco-backend-ea0m.onrender.com';
   static const String _iosSimulatorDefault =
-      'https://mini-soco-backend-zv3b.onrender.com';
+      'https://mini-soco-backend-ea0m.onrender.com';
   static const String _desktopDefault =
-      'https://mini-soco-backend-zv3b.onrender.com';
+      'https://mini-soco-backend-ea0m.onrender.com';
   static const Duration _probeTimeout = Duration(seconds: 2);
   static const String _prefsKeyLastKnownBaseUrl = 'api_service.last_base_url';
 
