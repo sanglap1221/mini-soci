@@ -46,7 +46,7 @@ flutter run
 
 - Android emulators default to `http://10.0.2.2:3000/api`.
 - Physical Android devices default to `http://192.168.29.103:3000/api`.
-- iOS simulators, desktop, and web builds default to `http://localhost:3000/api`.
+- iOS simulators, desktop, and web builds default to `https://mini-soco-backend-ea0m.onrender.com`.
 
 If your LAN IP changes, launch with an override:
 

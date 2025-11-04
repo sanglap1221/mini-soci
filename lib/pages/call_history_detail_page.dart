@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../models/call_model.dart';
+import '../services/call_service.dart';
+import 'call_screen.dart';
 import 'profile_page.dart';
 
 class CallHistoryDetailPage extends StatelessWidget {
@@ -18,6 +20,8 @@ class CallHistoryDetailPage extends StatelessWidget {
   final String contactName;
   final String? contactAvatarUrl;
   final List<CallModel> calls;
+
+  static final CallService _callService = CallService();
 
   @override
   Widget build(BuildContext context) {
@@ -90,6 +94,28 @@ class CallHistoryDetailPage extends StatelessWidget {
             ),
           );
         },
+      ),
+      bottomNavigationBar: SafeArea(
+        minimum: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.call),
+                label: const Text('Audio call'),
+                onPressed: () => _startCall(context, isVideoCall: false),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: FilledButton.icon(
+                icon: const Icon(Icons.videocam),
+                label: const Text('Video call'),
+                onPressed: () => _startCall(context, isVideoCall: true),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -167,5 +193,40 @@ class CallHistoryDetailPage extends StatelessWidget {
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => ProfilePage(userId: otherUserId)));
+  }
+
+  Future<void> _startCall(
+    BuildContext context, {
+    required bool isVideoCall,
+  }) async {
+    try {
+      final callId = await _callService.createCall(
+        callerId: currentUserId,
+        calleeId: otherUserId,
+        isVideoCall: isVideoCall,
+      );
+
+      final navigator = Navigator.of(context);
+      if (!navigator.mounted) return;
+
+      navigator.push(
+        MaterialPageRoute(
+          builder: (context) => CallScreen(
+            callId: callId,
+            callerId: currentUserId,
+            receiverId: otherUserId,
+            isInitiator: true,
+            isVideoCall: isVideoCall,
+            otherUserName: contactName,
+            otherUserAvatarUrl: contactAvatarUrl,
+          ),
+        ),
+      );
+    } catch (error) {
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Failed to start call: $error')),
+      );
+    }
   }
 }

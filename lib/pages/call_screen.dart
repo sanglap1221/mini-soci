@@ -48,6 +48,7 @@ class _CallScreenState extends State<CallScreen> {
   Stopwatch? _callStopwatch;
   Duration _callDuration = Duration.zero;
   String _callStatus = 'Connecting...';
+  bool _hasStartedTimer = false;
 
   @override
   void initState() {
@@ -109,23 +110,40 @@ class _CallScreenState extends State<CallScreen> {
       return;
     }
     _isClosing = true;
+    final navigator = Navigator.of(context);
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+    final messenger = ScaffoldMessenger.maybeOf(context);
     _callDocSub?.cancel();
     _callService.cancelRingingTimeout(widget.callId);
     _stopRingingSound();
     _callTimer?.cancel();
+    _callStopwatch?.stop();
+    _hasStartedTimer = false;
 
     if (_isInitialized) {
-      await _webrtcHelper.dispose();
+      try {
+        await _webrtcHelper.dispose();
+      } catch (error) {
+        debugPrint('CallScreen: dispose failed after remote hangup: $error');
+      }
     }
 
     if (!mounted) {
       return;
     }
 
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-    Navigator.of(context).pop();
+    messenger?.showSnackBar(SnackBar(content: Text(message)));
+
+    if (navigator.mounted) {
+      final didPop = await navigator.maybePop();
+      if (didPop) {
+        return;
+      }
+    }
+
+    if (rootNavigator != navigator && rootNavigator.mounted) {
+      await rootNavigator.maybePop();
+    }
   }
 
   @override
@@ -133,6 +151,7 @@ class _CallScreenState extends State<CallScreen> {
     _callDocSub?.cancel();
     _callTimer?.cancel();
     _callStopwatch?.stop();
+    _hasStartedTimer = false;
     _webrtcHelper.dispose();
     super.dispose();
   }
@@ -147,7 +166,7 @@ class _CallScreenState extends State<CallScreen> {
           setState(() {
             _callStatus = state;
           });
-          if (state == 'Connected') {
+          if (state == 'Connected' && !_hasStartedTimer) {
             _stopRingingSound();
             _startCallTimer();
           }
@@ -238,26 +257,45 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> _endCall({bool showSnackbar = false}) async {
     if (_isClosing) return; // Prevent re-entry
     _isClosing = true;
+    final navigator = Navigator.of(context);
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    _callDocSub?.cancel();
     _callService.cancelRingingTimeout(widget.callId);
 
     if (_isInitialized) {
       _stopRingingSound();
       final actorId = widget.isInitiator ? widget.callerId : widget.receiverId;
-      await _webrtcHelper.endCall(actorId: actorId);
+      try {
+        await _webrtcHelper.endCall(actorId: actorId);
+      } catch (error) {
+        debugPrint('CallScreen: failed to end call cleanly: $error');
+      }
     }
+    _callTimer?.cancel();
+    _callStopwatch?.stop();
+    _hasStartedTimer = false;
     if (mounted) {
       if (showSnackbar) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Call ended')));
+        messenger?.showSnackBar(const SnackBar(content: Text('Call ended')));
       }
-      Navigator.pop(context);
+      if (navigator.mounted) {
+        final didPop = await navigator.maybePop();
+        if (didPop) {
+          return;
+        }
+      }
+      if (rootNavigator != navigator && rootNavigator.mounted) {
+        await rootNavigator.maybePop();
+      }
     }
   }
 
   void _startCallTimer() {
+    _hasStartedTimer = true;
     _callTimer?.cancel();
     _callStopwatch?.stop();
+    _callDuration = Duration.zero;
     _callStopwatch = Stopwatch()..start();
     _callTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
       if (!mounted) {

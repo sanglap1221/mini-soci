@@ -60,6 +60,9 @@ dependencies:
   audioplayers: ^6.5.1
   hive: ^2.2.3
   hive_flutter: ^1.1.0
+  crypto: ^3.0.2
+  video_compress: ^3.1.4
+  flutter_image_compress: ^2.4.0
 
 dev_dependencies:
   flutter_test:

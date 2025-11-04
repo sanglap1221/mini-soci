@@ -1,7 +1,12 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:video_compress/video_compress.dart';
 import 'package:video_player/video_player.dart';
 import 'package:pay_go/utils/image_crop_helper.dart';
+import 'package:pay_go/utils/image_compress_helper.dart';
+import 'package:pay_go/utils/file_utils.dart';
+import 'package:pay_go/utils/video_compress_helper.dart';
+
 import '../services/api_service.dart';
 
 class Addpostpage extends StatefulWidget {
@@ -55,27 +60,74 @@ class _AddpostpageState extends State<Addpostpage> {
       case PostMediaType.image:
         final file = await ImageCropHelper.pickPostImage(context);
         if (file == null) return;
+        // Compute original diagnostics and then compress image before upload.
         _videoController?.dispose();
+        final originalDiag = await FileUtils.diagnostics(file);
+        final compressed = await ImageCompressHelper.compressImageFile(
+          file,
+          quality: 85,
+          maxWidth: 1080,
+          maxHeight: 1080,
+        );
+        final compressedDiag = await FileUtils.diagnostics(compressed);
+        // Save compressed file and store diagnostics as metadata on the media file
+        // We'll pass diagnostics to ApiService.createPost when uploading.
         setState(() {
-          _mediaFile = file;
+          _mediaFile = compressed;
           _mediaType = PostMediaType.image;
           _videoController = null;
+        });
+        // Store diagnostics temporarily on the ApiService instance for the upload
+        _apiService.setLatestClientDiagnostics(<String, String>{
+          'originalLength': originalDiag['length'].toString(),
+          'originalMd5': originalDiag['md5'] as String,
+          'compressedLength': compressedDiag['length'].toString(),
+          'compressedMd5': compressedDiag['md5'] as String,
+          'wasCompressed': (originalDiag['md5'] != compressedDiag['md5'])
+              .toString(),
         });
         break;
       case PostMediaType.video:
         final file = await ImageCropHelper.pickPostVideo(context);
         if (file == null) return;
+        // Compute diagnostics, compress video (non-blocking native), compute compressed diagnostics
+        setState(() => _isLoading = true);
+        final originalDiag = await FileUtils.diagnostics(file);
+        final compressedFile = await VideoCompressHelper.compressVideoFile(
+          file,
+          quality: VideoQuality.MediumQuality,
+        );
+        File finalFile;
+        Map<String, dynamic> compressedDiag;
+        if (compressedFile == null) {
+          // compression failed or not available; fall back to original
+          finalFile = file;
+          compressedDiag = await FileUtils.diagnostics(file);
+        } else {
+          finalFile = compressedFile;
+          compressedDiag = await FileUtils.diagnostics(compressedFile);
+        }
 
-        final controller = VideoPlayerController.file(file);
+        final controller = VideoPlayerController.file(finalFile);
         await controller.initialize();
 
         _videoController?.dispose();
         setState(() {
-          _mediaFile = file;
+          _mediaFile = finalFile;
           _mediaType = PostMediaType.video;
           _videoController = controller
             ..setLooping(true)
             ..play();
+          _isLoading = false;
+        });
+
+        _apiService.setLatestClientDiagnostics(<String, String>{
+          'originalLength': originalDiag['length'].toString(),
+          'originalMd5': originalDiag['md5'] as String,
+          'compressedLength': compressedDiag['length'].toString(),
+          'compressedMd5': compressedDiag['md5'] as String,
+          'wasCompressed': (originalDiag['md5'] != compressedDiag['md5'])
+              .toString(),
         });
         break;
     }

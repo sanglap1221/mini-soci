@@ -189,11 +189,11 @@ class _CallHistoryPageState extends State<CallHistoryPage> {
                             ),
                           ),
                           const SizedBox(height: 2),
-                          Text(
-                            '${summary.completedCalls} completed • ${summary.missedCalls} missed',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: Colors.grey[600]),
-                          ),
+                          // Text(
+                          //   '${summary.completedCalls} completed • ${summary.missedCalls} missed',
+                          //   style: Theme.of(context).textTheme.bodySmall
+                          //       ?.copyWith(color: Colors.grey[600]),
+                          // ),
                         ],
                       ),
                       trailing: SizedBox(

@@ -29,6 +29,7 @@ class ApiService {
   final AuthTokenProvider _authTokenProvider;
   final CacheManager _apiCache;
   final FirebaseFirestore _firestore;
+  Map<String, String>? _latestClientDiagnostics;
 
   static const String _postsCacheKey = 'api.posts';
 
@@ -246,6 +247,13 @@ class ApiService {
   String getFullImageUrl(String relativePath) =>
       _baseUrlResolver.getFullImageUrl(relativePath);
 
+  /// Store lightweight diagnostics from the client (e.g., file sizes and md5)
+  /// This is set by UI helpers before uploading a media file and attached to
+  /// the multipart request in `createPost`.
+  void setLatestClientDiagnostics(Map<String, String> diagnostics) {
+    _latestClientDiagnostics = diagnostics;
+  }
+
   Future<String?> getFirebaseToken({bool forceRefresh = false}) =>
       _authTokenProvider.getToken(forceRefresh: forceRefresh);
 
@@ -310,6 +318,14 @@ class ApiService {
               contentType: mediaTypeHeader,
             ),
           );
+
+    // Attach any client-side diagnostics (e.g., original/compressed length, md5)
+    if (_latestClientDiagnostics != null &&
+        _latestClientDiagnostics!.isNotEmpty) {
+      request.fields.addAll(_latestClientDiagnostics!);
+      // Clear after attaching so future requests don't reuse stale data.
+      _latestClientDiagnostics = null;
+    }
 
     final streamedResponse = await request.send();
     final response = await http.Response.fromStream(streamedResponse);
