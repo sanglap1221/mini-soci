@@ -49,6 +49,7 @@ class _CallScreenState extends State<CallScreen> {
   Duration _callDuration = Duration.zero;
   String _callStatus = 'Connecting...';
   bool _hasStartedTimer = false;
+  bool _hasClosedRemote = false;
 
   @override
   void initState() {
@@ -106,13 +107,10 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _handleRemoteHangup(String message) async {
-    if (_isClosing) {
+    if (_hasClosedRemote) {
       return;
     }
-    _isClosing = true;
-    final navigator = Navigator.of(context);
-    final rootNavigator = Navigator.of(context, rootNavigator: true);
-    final messenger = ScaffoldMessenger.maybeOf(context);
+    _hasClosedRemote = true;
     _callDocSub?.cancel();
     _callService.cancelRingingTimeout(widget.callId);
     _stopRingingSound();
@@ -132,8 +130,10 @@ class _CallScreenState extends State<CallScreen> {
       return;
     }
 
+    final messenger = ScaffoldMessenger.maybeOf(context);
     messenger?.showSnackBar(SnackBar(content: Text(message)));
 
+    final navigator = Navigator.of(context);
     if (navigator.mounted) {
       final didPop = await navigator.maybePop();
       if (didPop) {
@@ -141,7 +141,8 @@ class _CallScreenState extends State<CallScreen> {
       }
     }
 
-    if (rootNavigator != navigator && rootNavigator.mounted) {
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+    if (rootNavigator.mounted) {
       await rootNavigator.maybePop();
     }
   }
@@ -152,11 +153,13 @@ class _CallScreenState extends State<CallScreen> {
     _callTimer?.cancel();
     _callStopwatch?.stop();
     _hasStartedTimer = false;
+    _hasClosedRemote = false;
     _webrtcHelper.dispose();
     super.dispose();
   }
 
   Future<void> _initializeWebRTC() async {
+    _hasClosedRemote = false;
     _webrtcHelper = WebRTCHelper(
       callId: widget.callId,
       isVideoCall: widget.isVideoCall,
@@ -257,6 +260,7 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> _endCall({bool showSnackbar = false}) async {
     if (_isClosing) return; // Prevent re-entry
     _isClosing = true;
+    _hasClosedRemote = true;
     final navigator = Navigator.of(context);
     final rootNavigator = Navigator.of(context, rootNavigator: true);
     final messenger = ScaffoldMessenger.maybeOf(context);
