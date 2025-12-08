@@ -1,4 +1,4 @@
-# Pay Go
+# Soci_Go
 
 A Flutter-based social application with chat and post sharing functionalities.
 
