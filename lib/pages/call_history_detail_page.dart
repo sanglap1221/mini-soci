@@ -206,10 +206,9 @@ class CallHistoryDetailPage extends StatelessWidget {
         isVideoCall: isVideoCall,
       );
 
-      final navigator = Navigator.of(context);
-      if (!navigator.mounted) return;
+      if (!context.mounted) return;
 
-      navigator.push(
+      Navigator.of(context).push(
         MaterialPageRoute(
           builder: (context) => CallScreen(
             callId: callId,
@@ -223,6 +222,7 @@ class CallHistoryDetailPage extends StatelessWidget {
         ),
       );
     } catch (error) {
+      if (!context.mounted) return;
       final messenger = ScaffoldMessenger.maybeOf(context);
       messenger?.showSnackBar(
         SnackBar(content: Text('Failed to start call: $error')),

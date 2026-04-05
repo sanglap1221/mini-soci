@@ -25,7 +25,7 @@ class MyApp extends StatelessWidget {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: ThemeController.instance.mode,
       builder: (context, themeMode, _) => MaterialApp(
-        title: 'Pay Go',
+        title: 'SpheryWorld',
         theme: ThemeData(
           useMaterial3: true,
           primaryColor: primaryBlue,
@@ -36,8 +36,7 @@ class MyApp extends StatelessWidget {
             secondary: accentGreen,
             tertiary: accentOrange,
             error: alertRed,
-            background: appBackground,
-          ),
+          ).copyWith(surface: appBackground),
           appBarTheme: const AppBarTheme(
             backgroundColor: Colors.white,
             foregroundColor: primaryText,

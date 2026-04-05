@@ -53,6 +53,8 @@ class _ProfilePageState extends State<ProfilePage> {
 
   int get _friendCount => (_userData?['friendCount'] as num?)?.toInt() ?? 0;
 
+  String get _profileHeroTag => 'profile-picture-$profileUserId';
+
   @override
   void initState() {
     super.initState();
@@ -386,59 +388,62 @@ class _ProfilePageState extends State<ProfilePage> {
                 )
               : null,
           child: GestureDetector(
-            onTap: isCurrentUserProfile ? _showProfileOptions : null,
-            child: CircleAvatar(
-              radius: 60,
-              backgroundColor: Colors.grey[300],
-              child: _localProfileImage != null
-                  ? ClipOval(
-                      child: Image.file(
-                        _localProfileImage!,
-                        width: 120,
-                        height: 120,
-                        fit: BoxFit.cover,
-                      ),
-                    )
-                  : _remoteProfileImageUrl != null
-                  ? ClipOval(
-                      child: CachedNetworkImage(
-                        cacheManager: AppCacheManagers.imageCache,
-                        imageUrl: _apiService.getFullImageUrl(
-                          _remoteProfileImageUrl!,
-                        ),
-                        width: 100,
-                        height: 100,
-                        fit: BoxFit.cover,
-                        placeholder: (context, url) => Container(
+            onTap: _handleProfilePictureTap,
+            child: Hero(
+              tag: _profileHeroTag,
+              child: CircleAvatar(
+                radius: 60,
+                backgroundColor: Colors.grey[300],
+                child: _localProfileImage != null
+                    ? ClipOval(
+                        child: Image.file(
+                          _localProfileImage!,
                           width: 120,
+                          height: 120,
+                          fit: BoxFit.cover,
+                        ),
+                      )
+                    : _remoteProfileImageUrl != null
+                    ? ClipOval(
+                        child: CachedNetworkImage(
+                          cacheManager: AppCacheManagers.imageCache,
+                          imageUrl: _apiService.getFullImageUrl(
+                            _remoteProfileImageUrl!,
+                          ),
+                          width: 100,
                           height: 100,
-                          alignment: Alignment.center,
-                          color: Colors.grey[300],
-                          child: const SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                          fit: BoxFit.cover,
+                          placeholder: (context, url) => Container(
+                            width: 120,
+                            height: 100,
+                            alignment: Alignment.center,
+                            color: Colors.grey[300],
+                            child: const SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                          errorWidget: (context, url, error) => Container(
+                            width: 120,
+                            height: 100,
+                            color: Colors.grey[300],
+                            child: Icon(
+                              Icons.person,
+                              size: 40,
+                              color: Colors.grey[600],
+                            ),
                           ),
                         ),
-                        errorWidget: (context, url, error) => Container(
-                          width: 120,
-                          height: 100,
-                          color: Colors.grey[300],
-                          child: Icon(
-                            Icons.person,
-                            size: 40,
-                            color: Colors.grey[600],
-                          ),
+                      )
+                    : Text(
+                        (userData?['username'] ?? '?')[0].toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 48,
+                          color: Theme.of(context).primaryColor,
                         ),
                       ),
-                    )
-                  : Text(
-                      (userData?['username'] ?? '?')[0].toUpperCase(),
-                      style: TextStyle(
-                        fontSize: 48,
-                        color: Theme.of(context).primaryColor,
-                      ),
-                    ),
+              ),
             ),
           ),
         ),
@@ -1231,7 +1236,7 @@ class _ProfilePageState extends State<ProfilePage> {
           border: Border.all(color: Colors.grey[300]!, width: 0.5),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
+              color: Colors.black.withValues(alpha: 0.05),
               blurRadius: 2,
               offset: const Offset(0, 1),
             ),
@@ -1296,7 +1301,10 @@ class _ProfilePageState extends State<ProfilePage> {
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [Colors.transparent, Colors.black.withOpacity(0.3)],
+                colors: [
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: 0.3),
+                ],
               ),
             ),
           ),
@@ -1376,14 +1384,14 @@ class _ProfilePageState extends State<ProfilePage> {
         children: [
           Icon(
             Icons.video_library_rounded,
-            color: Colors.white.withOpacity(0.9),
+            color: Colors.white.withValues(alpha: 0.9),
             size: 48,
           ),
           const SizedBox(height: 8),
           Text(
             'Video',
             style: TextStyle(
-              color: Colors.white.withOpacity(0.8),
+              color: Colors.white.withValues(alpha: 0.8),
               fontSize: 12,
               fontWeight: FontWeight.w500,
             ),
@@ -1627,37 +1635,36 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
+  void _handleProfilePictureTap() {
+    if (isCurrentUserProfile) {
+      _showProfileOptions();
+      return;
+    }
+
+    if (_hasProfileImage) {
+      _showProfilePictureViewer();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No profile picture to display')),
+      );
+    }
+  }
+
   void _showProfilePictureViewer() {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        insetPadding: EdgeInsets.all(16),
-        child: InteractiveViewer(
-          child: _localProfileImage != null
-              ? Image.file(_localProfileImage!, fit: BoxFit.contain)
-              : (_remoteProfileImageUrl != null
-                    ? CachedNetworkImage(
-                        cacheManager: AppCacheManagers.imageCache,
-                        imageUrl: _apiService.getFullImageUrl(
-                          _remoteProfileImageUrl!,
-                        ),
-                        fit: BoxFit.contain,
-                        placeholder: (context, url) => Container(
-                          padding: const EdgeInsets.all(32),
-                          alignment: Alignment.center,
-                          child: const SizedBox(
-                            width: 32,
-                            height: 32,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        ),
-                        errorWidget: (context, url, error) => Container(
-                          padding: const EdgeInsets.all(32),
-                          alignment: Alignment.center,
-                          child: const Icon(Icons.error_outline, size: 48),
-                        ),
-                      )
-                    : SizedBox.shrink()),
+    if (!mounted) {
+      return;
+    }
+
+    final imageUrl = _remoteProfileImageUrl != null
+        ? _apiService.getFullImageUrl(_remoteProfileImageUrl!)
+        : null;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => ProfilePictureViewer(
+          heroTag: _profileHeroTag,
+          imageUrl: imageUrl,
+          localImage: _localProfileImage,
         ),
       ),
     );
@@ -1905,23 +1912,23 @@ class _ProfilePageState extends State<ProfilePage> {
                   style: TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
-              RadioListTile<ThemeMode>(
-                title: const Text('Use system'),
-                value: ThemeMode.system,
-                groupValue: current,
-                onChanged: (m) => select(ThemeMode.system),
+              _ThemeModeTile(
+                label: 'Use system',
+                mode: ThemeMode.system,
+                current: current,
+                onSelected: select,
               ),
-              RadioListTile<ThemeMode>(
-                title: const Text('Light'),
-                value: ThemeMode.light,
-                groupValue: current,
-                onChanged: (m) => select(ThemeMode.light),
+              _ThemeModeTile(
+                label: 'Light',
+                mode: ThemeMode.light,
+                current: current,
+                onSelected: select,
               ),
-              RadioListTile<ThemeMode>(
-                title: const Text('Dark'),
-                value: ThemeMode.dark,
-                groupValue: current,
-                onChanged: (m) => select(ThemeMode.dark),
+              _ThemeModeTile(
+                label: 'Dark',
+                mode: ThemeMode.dark,
+                current: current,
+                onSelected: select,
               ),
               const SizedBox(height: 8),
             ],
@@ -2154,6 +2161,99 @@ class _VideoThumbnailGeneratorState extends State<_VideoThumbnailGenerator> {
       File(_thumbnailPath!),
       fit: BoxFit.cover,
       errorBuilder: (context, error, stackTrace) => widget.fallback,
+    );
+  }
+}
+
+class ProfilePictureViewer extends StatelessWidget {
+  final String heroTag;
+  final String? imageUrl;
+  final File? localImage;
+
+  const ProfilePictureViewer({
+    super.key,
+    required this.heroTag,
+    this.imageUrl,
+    this.localImage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImage = localImage != null || (imageUrl?.isNotEmpty ?? false);
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: const Text(
+          'Profile Picture',
+          style: TextStyle(color: Colors.white),
+        ),
+      ),
+      body: hasImage
+          ? Center(
+              child: InteractiveViewer(
+                minScale: 0.8,
+                maxScale: 5,
+                child: Hero(
+                  tag: heroTag,
+                  child: localImage != null
+                      ? Image.file(localImage!, fit: BoxFit.contain)
+                      : CachedNetworkImage(
+                          imageUrl: imageUrl!,
+                          cacheManager: AppCacheManagers.imageCache,
+                          fit: BoxFit.contain,
+                          placeholder: (context, url) => const Center(
+                            child: SizedBox(
+                              width: 32,
+                              height: 32,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                          errorWidget: (context, url, error) => const Icon(
+                            Icons.broken_image_outlined,
+                            size: 72,
+                            color: Colors.white70,
+                          ),
+                        ),
+                ),
+              ),
+            )
+          : const Center(
+              child: Text(
+                'No profile picture available',
+                style: TextStyle(color: Colors.white70),
+              ),
+            ),
+    );
+  }
+}
+
+class _ThemeModeTile extends StatelessWidget {
+  const _ThemeModeTile({
+    required this.label,
+    required this.mode,
+    required this.current,
+    required this.onSelected,
+  });
+
+  final String label;
+  final ThemeMode mode;
+  final ThemeMode current;
+  final void Function(ThemeMode) onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = mode == current;
+    return ListTile(
+      title: Text(label),
+      trailing: selected ? const Icon(Icons.check, color: Colors.blue) : null,
+      onTap: () => onSelected(mode),
     );
   }
 }

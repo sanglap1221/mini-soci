@@ -176,7 +176,7 @@ class _FeedPageState extends State<FeedPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Post deleted successfully'),
-          backgroundColor: Colors.green,
+          backgroundColor: Colors.red,
         ),
       );
     } catch (e) {
@@ -185,7 +185,7 @@ class _FeedPageState extends State<FeedPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Failed to delete post: ${e.toString()}'),
-          backgroundColor: Colors.red,
+          backgroundColor: Colors.grey,
         ),
       );
     }

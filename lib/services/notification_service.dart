@@ -2,13 +2,20 @@ import 'dart:async';
 import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'api_service.dart';
+
+void _log(String message) {
+  if (kDebugMode) {
+    debugPrint('NotificationService: $message');
+  }
+}
 
 // Top-level function for background message handling
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  print('Handling background message: ${message.messageId}');
+  _log('Handling background message: ${message.messageId}');
 }
 
 class NotificationService {
@@ -44,7 +51,7 @@ class NotificationService {
             sound: true,
           );
 
-      print('User granted permission: ${settings.authorizationStatus}');
+      _log('User granted permission: ${settings.authorizationStatus}');
 
       // Initialize local notifications
       await _initializeLocalNotifications();
@@ -56,11 +63,11 @@ class NotificationService {
 
       // Handle foreground messages
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-        print('Got a message whilst in the foreground!');
-        print('Message data: ${message.data}');
+        _log('Got a message whilst in the foreground!');
+        _log('Message data: ${message.data}');
 
         if (message.notification != null) {
-          print(
+          _log(
             'Message also contained a notification: ${message.notification}',
           );
           _showLocalNotification(message);
@@ -69,7 +76,7 @@ class NotificationService {
 
       // Handle notification clicks when app is in background
       FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-        print('A new onMessageOpenedApp event was published!');
+        _log('A new onMessageOpenedApp event was published!');
         _handleNotificationClick(message.data);
       });
 
@@ -82,7 +89,7 @@ class NotificationService {
 
       _initialized = true;
     } catch (e) {
-      print('Error initializing notifications: $e');
+      _log('Error initializing notifications: $e');
     }
   }
 
@@ -116,7 +123,7 @@ class NotificationService {
               });
             }
           } catch (e) {
-            print('Error parsing notification payload: $e');
+            _log('Error parsing notification payload: $e');
           }
         }
       },
@@ -185,7 +192,7 @@ class NotificationService {
     if (currentUserId != null &&
         senderId != null &&
         currentUserId == senderId) {
-      print('Skipping notification: current user is the sender');
+      _log('Skipping notification: current user is the sender');
       return;
     }
 
@@ -277,17 +284,17 @@ class NotificationService {
   }
 
   void _handleNotificationClick(Map<String, dynamic> data) {
-    print('Notification clicked with data: $data');
+    _log('Notification clicked with data: $data');
     _notificationClickController.add(data);
   }
 
   Future<String?> getToken() async {
     try {
       String? token = await _firebaseMessaging.getToken();
-      print('FCM Token: $token');
+      _log('FCM Token: $token');
       return token;
     } catch (e) {
-      print('Error getting FCM token: $e');
+      _log('Error getting FCM token: $e');
       return null;
     }
   }
@@ -298,10 +305,10 @@ class NotificationService {
       if (token != null) {
         // Send token to your backend
         await apiService.updateFCMToken(token);
-        print('FCM token sent to server');
+        _log('FCM token sent to server');
       }
     } catch (e) {
-      print('Error sending FCM token to server: $e');
+      _log('Error sending FCM token to server: $e');
     }
   }
 
@@ -312,9 +319,9 @@ class NotificationService {
   Future<void> deleteToken() async {
     try {
       await _firebaseMessaging.deleteToken();
-      print('FCM token deleted');
+      _log('FCM token deleted');
     } catch (e) {
-      print('Error deleting FCM token: $e');
+      _log('Error deleting FCM token: $e');
     }
   }
 

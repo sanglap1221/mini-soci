@@ -235,8 +235,8 @@ class _ReelsPageState extends State<ReelsPage> {
                     begin: Alignment.bottomCenter,
                     end: Alignment.topCenter,
                     colors: [
-                      Colors.black.withOpacity(0.65),
-                      Colors.black.withOpacity(0.1),
+                      Colors.black.withValues(alpha: 0.65),
+                      Colors.black.withValues(alpha: 0.1),
                     ],
                     stops: [0.0, 0.7],
                   ),
@@ -503,7 +503,7 @@ class _ReelsPageState extends State<ReelsPage> {
       setState(() {
         _postInteractions[postId] = currentState.copyWith(isLikeLoading: false);
         _updatePostInteractionFieldsInList(
-          postId!,
+          postId,
           likeCount: currentState.likeCount,
           isLiked: currentState.isLiked,
         );
@@ -1132,7 +1132,7 @@ class _ReelVideoPlayerState extends State<ReelVideoPlayer>
               child: Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.5),
+                  color: Colors.black.withValues(alpha: 0.5),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(

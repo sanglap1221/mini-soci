@@ -32,6 +32,8 @@ class ApiService {
   Map<String, String>? _latestClientDiagnostics;
 
   static const String _postsCacheKey = 'api.posts';
+  static const String cloudinaryCloudName = 'dgjv75rzl';
+  static const String cloudinaryApiKey = '915668577145386';
 
   String _profileCacheKey(String userId) => 'api.profile.$userId';
   String _commentsCacheKey(String postId) => 'api.comments.$postId';
@@ -259,17 +261,14 @@ class ApiService {
 
   Future<String> _prepareBaseUrl() => _baseUrlResolver.prepareBaseUrl();
 
-  /// Returns the effective base URL used for API calls. Some deployments
-  /// expose the API under a '/api' prefix while others host it at the root.
-  /// This helper mirrors the normalization logic used by `_authorizedRequest`
-  /// so all internal callers build URIs consistently.
-  Future<String> _prepareEffectiveBaseUrl() async {
-    final base = await _prepareBaseUrl();
-    final b = base.trim();
-    if (b.isEmpty) return b;
-    if (b.endsWith('/api')) return b;
-    if (b.endsWith('/')) return '${b}api';
-    return '$b/api';
+  Uri _composeUri(String base, String path, Map<String, String>? query) {
+    final normalizedBase = base.endsWith('/') ? base : '$base/';
+    final normalizedPath = path.startsWith('/') ? path.substring(1) : path;
+    final uri = Uri.parse('$normalizedBase$normalizedPath');
+    if (query == null || query.isEmpty) {
+      return uri;
+    }
+    return uri.replace(queryParameters: query);
   }
 
   Future<Map<String, dynamic>> createPost(
@@ -281,7 +280,7 @@ class ApiService {
     if (token == null) throw Exception('Not authenticated');
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) throw Exception('Not authenticated');
-    final resolvedBaseUrl = await _prepareEffectiveBaseUrl();
+    final resolvedBaseUrl = await _prepareBaseUrl();
 
     _debugLogTokenClaims(token, context: 'createPost');
 
@@ -307,7 +306,10 @@ class ApiService {
         : MediaType('video', ext == 'mov' ? 'quicktime' : ext);
 
     final request =
-        http.MultipartRequest('POST', Uri.parse('$resolvedBaseUrl/posts'))
+        http.MultipartRequest(
+            'POST',
+            _composeUri(resolvedBaseUrl, '/posts', null),
+          )
           ..headers['Authorization'] = 'Bearer $token'
           ..headers['Accept'] = 'application/json'
           ..fields['caption'] = caption.trim().isEmpty ? ' ' : caption.trim()
@@ -842,7 +844,7 @@ class ApiService {
 
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) throw Exception('Not authenticated');
-    final resolvedBaseUrl = await _prepareEffectiveBaseUrl();
+    final resolvedBaseUrl = await _prepareBaseUrl();
 
     final ext = imageFile.path.toLowerCase().split('.').last;
     if (!['jpg', 'jpeg', 'png'].contains(ext)) {
@@ -854,7 +856,7 @@ class ApiService {
     final request =
         http.MultipartRequest(
             'POST',
-            Uri.parse('$resolvedBaseUrl/users/$userId/profile-pic'),
+            _composeUri(resolvedBaseUrl, '/users/$userId/profile-pic', null),
           )
           ..headers['Authorization'] = 'Bearer $token'
           ..headers['Accept'] = 'application/json'
@@ -1443,29 +1445,8 @@ class ApiService {
     final token = await instance.getFirebaseToken(forceRefresh: isRetry);
     if (token == null) throw Exception('Not authenticated');
     final base = await instance._prepareBaseUrl();
-
-    // Some deployments expose API at the root (https://host) while others use a '/api' prefix
-    // Normalize here so callers can always pass paths like '/posts' and we'll target the
-    // correct server URL. If the resolved base already includes '/api' we keep it.
-    final effectiveBase = () {
-      try {
-        final b = base.trim();
-        if (b.isEmpty) return b;
-        if (b.endsWith('/api')) return b;
-        if (b.endsWith('/')) return '${b}api';
-        return '$b/api';
-      } catch (_) {
-        return base;
-      }
-    }();
-
-    _log('Using effective base URL: $effectiveBase');
-
-    final uri = Uri.parse('$effectiveBase$path').replace(
-      queryParameters: queryParameters == null || queryParameters.isEmpty
-          ? null
-          : queryParameters,
-    );
+    final uri = instance._composeUri(base, path, queryParameters);
+    _log('Request URI: $uri');
 
     final headers = <String, String>{
       'Authorization': 'Bearer $token',

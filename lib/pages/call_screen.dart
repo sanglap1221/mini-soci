@@ -131,9 +131,11 @@ class _CallScreenState extends State<CallScreen> {
     }
 
     final messenger = ScaffoldMessenger.maybeOf(context);
+    final navigator = Navigator.of(context);
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+
     messenger?.showSnackBar(SnackBar(content: Text(message)));
 
-    final navigator = Navigator.of(context);
     if (navigator.mounted) {
       final didPop = await navigator.maybePop();
       if (didPop) {
@@ -141,7 +143,6 @@ class _CallScreenState extends State<CallScreen> {
       }
     }
 
-    final rootNavigator = Navigator.of(context, rootNavigator: true);
     if (rootNavigator.mounted) {
       await rootNavigator.maybePop();
     }
@@ -212,10 +213,14 @@ class _CallScreenState extends State<CallScreen> {
     } catch (e) {
       debugPrint('WebRTC initialization failed: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        final navigator = Navigator.of(context);
+        messenger?.showSnackBar(
           SnackBar(content: Text('Failed to initialize call: $e')),
         );
-        Navigator.of(context).pop();
+        if (navigator.mounted) {
+          navigator.pop();
+        }
       }
       return;
     }

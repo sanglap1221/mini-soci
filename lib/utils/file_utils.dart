@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
@@ -15,13 +14,13 @@ class FileUtils {
 
   static Future<String> _md5ForFile(File file) async {
     final input = file.openRead();
-    final _digestSink = _DigestAccumulatorSink();
-    final byteSink = md5.startChunkedConversion(_digestSink);
+    final digestSink = _DigestAccumulatorSink();
+    final byteSink = md5.startChunkedConversion(digestSink);
     await for (final chunk in input) {
       byteSink.add(chunk);
     }
     byteSink.close();
-    final digest = _digestSink.digest;
+    final digest = digestSink.digest;
     return digest.toString();
   }
 }

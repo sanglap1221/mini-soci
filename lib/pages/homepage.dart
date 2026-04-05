@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -19,6 +21,8 @@ class _HomepageState extends State<Homepage> {
   int _selectedIndex = 0;
   Object? _feedRefreshToken;
   bool _isNavVisible = true;
+  bool _awaitingFeedExit = false;
+  Timer? _exitResetTimer;
 
   void signOut() {
     FirebaseAuth.instance.signOut();
@@ -31,10 +35,14 @@ class _HomepageState extends State<Homepage> {
     );
 
     if (created == true) {
-      setState(() {
-        _feedRefreshToken = Object();
-      });
+      _triggerFeedRefresh();
     }
+  }
+
+  void _triggerFeedRefresh() {
+    setState(() {
+      _feedRefreshToken = Object();
+    });
   }
 
   Widget _getPage(int index) {
@@ -57,6 +65,7 @@ class _HomepageState extends State<Homepage> {
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
+      _awaitingFeedExit = false;
     });
   }
 
@@ -85,6 +94,43 @@ class _HomepageState extends State<Homepage> {
     setState(() {
       _isNavVisible = visible;
     });
+  }
+
+  Future<bool> _handleBackPress() async {
+    if (_selectedIndex != 0) {
+      setState(() {
+        _selectedIndex = 0;
+        _awaitingFeedExit = false;
+      });
+      return false;
+    }
+
+    if (!_awaitingFeedExit) {
+      _triggerFeedRefresh();
+      _awaitingFeedExit = true;
+      _exitResetTimer?.cancel();
+      _exitResetTimer = Timer(const Duration(seconds: 2), () {
+        if (mounted) {
+          _awaitingFeedExit = false;
+        }
+      });
+
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.hideCurrentSnackBar();
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('Press back again to exit')),
+      );
+      return false;
+    }
+
+    _exitResetTimer?.cancel();
+    return true;
+  }
+
+  @override
+  void dispose() {
+    _exitResetTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -155,34 +201,48 @@ class _HomepageState extends State<Homepage> {
       ),
     );
 
-    return Scaffold(
-      extendBody: true,
-      body: Stack(
-        children: [
-          NotificationListener<ScrollNotification>(
-            onNotification: _onScrollNotification,
-            child: _getPage(_selectedIndex),
-          ),
-          Positioned(left: 0, right: 0, bottom: 0, child: navBar),
-        ],
+    final navigator = Navigator.of(context);
+
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) {
+          return;
+        }
+        final shouldPop = await _handleBackPress();
+        if (shouldPop && navigator.mounted) {
+          navigator.maybePop();
+        }
+      },
+      child: Scaffold(
+        extendBody: true,
+        body: Stack(
+          children: [
+            NotificationListener<ScrollNotification>(
+              onNotification: _onScrollNotification,
+              child: _getPage(_selectedIndex),
+            ),
+            Positioned(left: 0, right: 0, bottom: 0, child: navBar),
+          ],
+        ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+        floatingActionButton: _selectedIndex == 0
+            ? AnimatedPadding(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                padding: EdgeInsets.only(
+                  bottom:
+                      (_isNavVisible ? 96.0 : 24.0) +
+                      MediaQuery.of(context).padding.bottom,
+                  right: 8,
+                ),
+                child: FloatingActionButton(
+                  onPressed: _navigateToAddPost,
+                  child: const Icon(Icons.add),
+                ),
+              )
+            : null,
       ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      floatingActionButton: _selectedIndex == 0
-          ? AnimatedPadding(
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOut,
-              padding: EdgeInsets.only(
-                bottom:
-                    (_isNavVisible ? 96.0 : 24.0) +
-                    MediaQuery.of(context).padding.bottom,
-                right: 8,
-              ),
-              child: FloatingActionButton(
-                onPressed: _navigateToAddPost,
-                child: const Icon(Icons.add),
-              ),
-            )
-          : null,
     );
   }
 }

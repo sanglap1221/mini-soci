@@ -1,8 +1,4 @@
-import 'dart:io' show HttpClient, Platform;
-
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 // Hive and other heavy services are initialized lazily in background.
 import 'package:pay_go/firebase_options.dart';
@@ -34,7 +30,7 @@ class _SplashScreenState extends State<SplashScreen> {
       // - Firebase must be initialized before using FirebaseAuth/Firestore
       // - ApiService depends on Firebase and therefore must be created/used
       //   after Firebase.initializeApp completes.
-      final overrideBaseUrl = await _resolveAndroidLocalBaseUrl();
+      const overrideBaseUrl = 'https://mini-soco-backend-1-d2i9.onrender.com/api';
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
@@ -104,51 +100,5 @@ class _SplashScreenState extends State<SplashScreen> {
         ),
       ),
     );
-  }
-
-  Future<String?> _resolveAndroidLocalBaseUrl() async {
-    if (kReleaseMode || kIsWeb) return null;
-    if (!Platform.isAndroid) return null;
-
-    try {
-      final androidInfo = await DeviceInfoPlugin().androidInfo;
-      final candidates = <String>[];
-
-      if (androidInfo.isPhysicalDevice) {
-        candidates.addAll([
-          'https://mini-soco-backend-ea0m.onrender.com',
-          'http://10.0.2.2:3000/api',
-        ]);
-      } else {
-        candidates.addAll([
-          'http://10.0.2.2:3000/api',
-          'https://mini-soco-backend-ea0m.onrender.com',
-        ]);
-      }
-
-      for (final candidate in candidates) {
-        if (await _isServerReachable(candidate)) return candidate;
-      }
-    } catch (e) {
-      debugPrint('Resolve override base url failed: $e');
-    }
-    return null;
-  }
-
-  Future<bool> _isServerReachable(String baseUrl) async {
-    try {
-      final uri = Uri.parse(baseUrl);
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 2);
-      final request = await client.openUrl('HEAD', uri);
-      request.followRedirects = false;
-      final response = await request.close();
-      await response.drain();
-      client.close(force: true);
-      return response.statusCode >= 200 && response.statusCode < 500;
-    } catch (e) {
-      debugPrint('Failed to reach $baseUrl: $e');
-      return false;
-    }
   }
 }

@@ -56,7 +56,7 @@ class _NotificationHandlerState extends State<NotificationHandler> {
         break;
 
       default:
-        print('Unknown notification type: $type');
+        debugPrint('Unknown notification type: $type');
     }
   }
 
@@ -64,7 +64,7 @@ class _NotificationHandlerState extends State<NotificationHandler> {
     // Extract otherUserId from chatId (format: userId1_userId2)
     final parts = chatId.split('_');
     if (parts.length != 2) {
-      print('Invalid chatId format: $chatId');
+      debugPrint('Invalid chatId format: $chatId');
       return;
     }
 

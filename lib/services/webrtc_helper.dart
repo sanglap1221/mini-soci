@@ -135,7 +135,7 @@ class WebRTCHelper {
 
     // Handle connection state changes
     _peerConnection?.onConnectionState = (RTCPeerConnectionState state) {
-      print('Connection state: $state');
+      debugPrint('WebRTC connection state: $state');
     };
   }
 
@@ -255,7 +255,7 @@ class WebRTCHelper {
       await _peerConnection!.addCandidate(candidate);
       _processedCandidates.add(candidateKey);
     } catch (e) {
-      print('Error adding ICE candidate: $e');
+      debugPrint('Error adding ICE candidate: $e');
     }
   }
 

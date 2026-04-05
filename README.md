@@ -1,6 +1,6 @@
-# Soci_Go
+# SpheryWorld
 
-A Flutter-based social application with chat and post sharing functionalities.
+A premium social media platform for modern connection and sharing.
 
 ## Features
 
@@ -44,7 +44,8 @@ flutter run
 
 `ApiService` now resolves the backend base URL at runtime:
 
-- Android emulators default to `http://10.0.2.2:3000/api`.
+- Android emulators and physical devices now use the hosted backend at
+  `https://mini-soco-backend-ea0m.onrender.com`.
 - Physical Android devices default to `http://192.168.29.103:3000/api`.
 - iOS simulators, desktop, and web builds default to `https://mini-soco-backend-ea0m.onrender.com`.
 
